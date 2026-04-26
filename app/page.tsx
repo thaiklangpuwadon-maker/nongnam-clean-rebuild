@@ -1,188 +1,235 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ADMIN_PIN, Book, defaultBooks, Gender, OutfitCategory, outfits, STARTING_GEMS } from "../lib/appData";
-import { BUCKET, getSupabaseBrowserClient, hasSupabaseConfig } from "../lib/supabaseClient";
+import { useRouter } from "next/navigation";
+import {
+  BOOK_CATEGORIES,
+  BookCategory,
+  Book,
+  Outfit,
+  OutfitCategory,
+  buildDefaultManifest,
+} from "../lib/appData";
+import {
+  DEFAULT_USER_MEMORY,
+  LOCAL_ASSETS_KEY,
+  MEMORY_KEY,
+  MANIFEST_KEY,
+  UserMemory,
+  getDefaultOutfitId,
+  loadJSON,
+  loadLocalManifest,
+  resetCharacterOnly,
+  saveJSON,
+} from "../lib/storage";
+import {
+  BUCKET,
+  fetchManifestRemote,
+  getSupabaseBrowserClient,
+  hasSupabaseConfig,
+} from "../lib/supabase";
 
-type Screen = "welcome" | "setup" | "chat" | "outfits" | "books" | "admin" | "settings";
+type Screen = "welcome" | "setup" | "chat" | "outfits" | "books" | "reader" | "settings";
 type Status = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
-type Chat = { role:"user"|"assistant"; content:string };
 
-const MEMORY_KEY = "nongnam_clean_memory_v1";
-const LOCAL_ASSETS = "nongnam_clean_local_assets_v1";
-const LOCAL_BOOKS = "nongnam_clean_books_v1";
+const APP_VERSION = "v2.0.0";
 
-const defaultMemory = {
-  setupDone: false,
-  gender: "female" as Gender,
-  userNickname: "พี่",
-  nongnamName: "น้องน้ำ",
-  relationshipMode: "lover",
-  sulkyLevel: "medium",
-  selectedOutfitId: "f_001",
-  age20Confirmed: false,
-  gems: STARTING_GEMS,
-  purchasedOutfitIds: ["f_001", "m_001"] as string[],
-  purchasedBookIds: ["book_001"] as string[],
-  chat: [] as Chat[]
-};
-
-function getDefaultOutfitId(gender:Gender) {
-  return gender === "male" ? "m_001" : "f_001";
-}
-
-function mimeType() {
-  const list = ["audio/webm;codecs=opus","audio/webm","audio/mp4","audio/mpeg"];
+function mimeType(): string {
+  const list = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/mpeg"];
   return list.find(t => typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(t)) || "";
 }
 
 export default function Page() {
-  const [screen,setScreen] = useState<Screen>("welcome");
-  const [ready,setReady] = useState(false);
-  const [mem,setMem] = useState(defaultMemory);
-  const [assets,setAssets] = useState<Record<string,string>>({});
-  const [books,setBooks] = useState<Book[]>(defaultBooks);
-  const [input,setInput] = useState("");
-  const [status,setStatus] = useState<Status>("idle");
-  const [toast,setToast] = useState("");
-  const [adminPin,setAdminPin] = useState("");
-  const [adminOk,setAdminOk] = useState(false);
-  const [category,setCategory] = useState<OutfitCategory>("regular");
-  const [ms,setMs] = useState(0);
+  const router = useRouter();
 
-  const rec = useRef<MediaRecorder|null>(null);
-  const stream = useRef<MediaStream|null>(null);
+  /* ---------- core state ---------- */
+  const [screen, setScreen] = useState<Screen>("welcome");
+  const [ready, setReady] = useState(false);
+  const [mem, setMem] = useState<UserMemory>(DEFAULT_USER_MEMORY);
+  const [assets, setAssets] = useState<Record<string, string>>({});
+  const [manifest, setManifest] = useState(buildDefaultManifest());
+  const [input, setInput] = useState("");
+  const [status, setStatus] = useState<Status>("idle");
+  const [toast, setToast] = useState("");
+  const [category, setCategory] = useState<OutfitCategory>("regular");
+  const [bookCat, setBookCat] = useState<BookCategory | "all">("all");
+  const [activeBook, setActiveBook] = useState<Book | null>(null);
+  const [ms, setMs] = useState(0);
+  const [versionTaps, setVersionTaps] = useState(0);
+
+  /* ---------- voice refs ---------- */
+  const rec = useRef<MediaRecorder | null>(null);
+  const stream = useRef<MediaStream | null>(null);
   const chunks = useRef<BlobPart[]>([]);
   const startAt = useRef(0);
   const timer = useRef<any>(null);
 
+  /* ---------- pinch-zoom state ---------- */
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const [zoom, setZoom] = useState({ scale: 1, x: 0, y: 0 });
+  const pinch = useRef({
+    active: false,
+    startDist: 0,
+    startScale: 1,
+    pointers: new Map<number, { x: number; y: number }>(),
+    lastTap: 0,
+    dragging: false,
+    dragStart: { x: 0, y: 0 },
+    zoomStart: { x: 0, y: 0 },
+  });
+
   const supabaseReady = hasSupabaseConfig();
   const supabase = getSupabaseBrowserClient();
 
-  const currentOutfit = outfits.find(o=>o.id===mem.selectedOutfitId) || outfits.find(o=>o.id===getDefaultOutfitId(mem.gender)) || outfits[0];
-  const currentImage = assets[currentOutfit.id] || currentOutfit.defaultImage;
+  /* ---------- derived ---------- */
+  const allOutfits = manifest.outfits;
+  const allBooks = manifest.books;
 
-  const visibleOutfits = useMemo(()=> {
-    return outfits.filter(o => o.gender === mem.gender && o.category === category);
-  }, [mem.gender, category]);
+  const currentOutfit: Outfit =
+    allOutfits.find(o => o.id === mem.selectedOutfitId) ||
+    allOutfits.find(o => o.id === getDefaultOutfitId(mem.gender)) ||
+    allOutfits[0];
 
-  useEffect(()=> {
-    try {
-      const saved = localStorage.getItem(MEMORY_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        setMem({...defaultMemory, ...parsed});
-        setScreen(parsed.setupDone ? "chat" : "welcome");
-      }
-      const savedAssets = localStorage.getItem(LOCAL_ASSETS);
-      if (savedAssets) setAssets(JSON.parse(savedAssets));
-      const savedBooks = localStorage.getItem(LOCAL_BOOKS);
-      if (savedBooks) setBooks(JSON.parse(savedBooks));
-    } catch {}
+  const currentChatImage = assets[`${currentOutfit.id}_chat`] || currentOutfit.chatImage;
+  const currentBookImage =
+    assets[`${currentOutfit.id}_book`] || currentOutfit.bookImage || currentChatImage;
+
+  const visibleOutfits = useMemo(() => {
+    return allOutfits.filter(
+      o => o.visible !== false && o.gender === mem.gender && o.category === category
+    );
+  }, [allOutfits, mem.gender, category]);
+
+  const visibleBooks = useMemo(() => {
+    if (bookCat === "all") return allBooks;
+    return allBooks.filter(b => b.category === bookCat);
+  }, [allBooks, bookCat]);
+
+  /* ---------- LOAD on mount ---------- */
+  useEffect(() => {
+    const savedMem = loadJSON<Partial<UserMemory>>(MEMORY_KEY, {});
+    const merged = { ...DEFAULT_USER_MEMORY, ...savedMem };
+    setMem(merged);
+
+    const savedAssets = loadJSON<Record<string, string>>(LOCAL_ASSETS_KEY, {});
+    setAssets(savedAssets);
+
+    const savedManifest = loadLocalManifest();
+    setManifest(savedManifest);
+
+    // ถ้าตั้งค่าแล้วเข้า chat เลย
+    if (merged.setupDone) setScreen("chat");
+
     setReady(true);
   }, []);
 
-  useEffect(()=> {
-    if (!ready) return;
-    localStorage.setItem(MEMORY_KEY, JSON.stringify(mem));
-  }, [mem, ready]);
+  /* ---------- PERSIST ---------- */
+  useEffect(() => { if (ready) saveJSON(MEMORY_KEY, mem); }, [mem, ready]);
+  useEffect(() => { if (ready) saveJSON(LOCAL_ASSETS_KEY, assets); }, [assets, ready]);
 
-  useEffect(()=> {
-    if (!ready) return;
-    localStorage.setItem(LOCAL_ASSETS, JSON.stringify(assets));
-  }, [assets, ready]);
-
-  useEffect(()=> {
-    if (!ready) return;
-    localStorage.setItem(LOCAL_BOOKS, JSON.stringify(books));
-  }, [books, ready]);
-
-  useEffect(()=> {
-    if (!supabaseReady || !supabase) return;
-    loadRemoteAssets();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  /* ---------- LOAD remote manifest if Supabase ready ---------- */
+  useEffect(() => {
+    if (!supabaseReady) return;
+    fetchManifestRemote().then(remote => {
+      if (remote && Array.isArray(remote.outfits) && Array.isArray(remote.books)) {
+        setManifest(remote);
+      }
+    });
   }, [supabaseReady]);
 
-  async function loadRemoteAssets() {
-    if (!supabase) return;
-    const next: Record<string,string> = {};
-    for (const o of outfits) {
-      const path = `outfits/${o.id}.jpg`;
-      const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
-      if (data?.publicUrl) next[o.id] = `${data.publicUrl}?v=${Date.now()}`;
+  /* ---------- LOAD remote outfit images ---------- */
+  useEffect(() => {
+    if (!supabaseReady || !supabase) return;
+    const next: Record<string, string> = {};
+    for (const o of allOutfits) {
+      const chatPath = `outfits/${o.id}_chatImage.jpg`;
+      const bookPath = `outfits/${o.id}_bookImage.jpg`;
+      const { data: c } = supabase.storage.from(BUCKET).getPublicUrl(chatPath);
+      const { data: b } = supabase.storage.from(BUCKET).getPublicUrl(bookPath);
+      if (c?.publicUrl) next[`${o.id}_chat`] = `${c.publicUrl}?v=${Date.now()}`;
+      if (b?.publicUrl) next[`${o.id}_book`] = `${b.publicUrl}?v=${Date.now()}`;
     }
-    if (Object.keys(next).length) setAssets(prev=>({...prev, ...next}));
-  }
+    if (Object.keys(next).length) setAssets(prev => ({ ...prev, ...next }));
+  }, [supabaseReady, allOutfits.length]);
 
-  function notify(text:string) {
+  /* ---------- helpers ---------- */
+  function notify(text: string) {
     setToast(text);
-    setTimeout(()=>setToast(""),2600);
+    setTimeout(() => setToast(""), 2600);
+  }
+  function updateMem(patch: Partial<UserMemory>) {
+    setMem(prev => ({ ...prev, ...patch }));
+  }
+  function isUnlocked(id: string) {
+    return mem.purchasedOutfitIds.includes(id);
   }
 
-  function updateMem(patch:any) {
-    setMem(prev=>({...prev, ...patch}));
-  }
-
-  function hardResetCharacterOnly() {
-    if (!confirm("คุณต้องการรีเซ็ตความจำ/คาแรกเตอร์ของน้องน้ำใช่ไหม\nเครดิต ชุดที่ซื้อ และหนังสือที่ซื้อจะไม่ถูกลบ")) return;
-    setMem(prev=>({
-      ...defaultMemory,
-      gems: prev.gems,
-      purchasedOutfitIds: prev.purchasedOutfitIds,
-      purchasedBookIds: prev.purchasedBookIds
-    }));
+  /* ---------- reset (เก็บเพชร + ของที่ซื้อแล้ว) ---------- */
+  function doResetCharacter() {
+    if (!confirm("รีเซ็ตความจำ/ตัวละครน้องน้ำ?\nเครดิต ชุด และหนังสือที่ซื้อแล้วจะไม่ถูกลบ")) return;
+    setMem(prev => resetCharacterOnly(prev));
     setScreen("setup");
     notify("รีเซ็ตเฉพาะความจำแล้วค่ะ");
   }
 
+  /* ---------- setup flow ---------- */
+  function pickGender(g: "female" | "male") {
+    updateMem({
+      gender: g,
+      selectedOutfitId: g === "female" ? "f_001" : "m_001",
+    });
+    setScreen("setup");
+  }
+
   function finishSetup() {
-    setMem(prev=>({
+    setMem(prev => ({
       ...prev,
       setupDone: true,
       selectedOutfitId: prev.selectedOutfitId || getDefaultOutfitId(prev.gender),
-      chat: prev.chat.length ? prev.chat : [{role:"assistant", content:`${prev.userNickname} มาแล้วเหรอคะ วันนี้เหนื่อยไหม น้องน้ำอยู่ตรงนี้นะ`}]
+      chat: prev.chat.length
+        ? prev.chat
+        : [{ role: "assistant", content: `${prev.userNickname}มาแล้วเหรอคะ วันนี้เหนื่อยไหม ${prev.nongnamName}อยู่ตรงนี้นะ` }],
     }));
     setScreen("chat");
   }
 
-  function isUnlocked(id:string) {
-    return mem.purchasedOutfitIds.includes(id) || adminOk;
-  }
-
-  function selectOutfit(id:string) {
-    const o = outfits.find(x=>x.id===id);
+  /* ---------- outfit ---------- */
+  function selectOutfit(id: string) {
+    const o = allOutfits.find(x => x.id === id);
     if (!o) return;
     if (o.ageRestricted && !mem.age20Confirmed) {
-      const ok = confirm("หมวดนี้สำหรับผู้ใช้ที่มีอายุ 20 ปีขึ้นไป\nคุณยืนยันหรือไม่ว่าคุณมีอายุ 20 ปีขึ้นไป");
+      const ok = confirm("หมวดนี้สำหรับผู้ใช้อายุ 20 ปีขึ้นไป\nคุณยืนยันหรือไม่ว่าอายุ 20 ปีขึ้นไป?");
       if (!ok) return;
-      updateMem({age20Confirmed:true});
+      updateMem({ age20Confirmed: true });
     }
     if (!isUnlocked(id)) return notify(`ชุดนี้ยังล็อกอยู่ ต้องใช้ ${o.price} เพชร`);
-    updateMem({selectedOutfitId:id});
+    updateMem({ selectedOutfitId: id });
     notify(`เปลี่ยนเป็น ${o.title} แล้ว`);
   }
 
-  function buyOutfit(id:string) {
-    const o = outfits.find(x=>x.id===id);
+  function buyOutfit(id: string) {
+    const o = allOutfits.find(x => x.id === id);
     if (!o) return;
     if (mem.purchasedOutfitIds.includes(id)) return selectOutfit(id);
     if (mem.gems < o.price) return notify("เพชรไม่พอค่ะ");
+    if (!confirm(`ใช้ ${o.price} เพชรปลดล็อก "${o.title}" ใช่ไหม?`)) return;
     updateMem({
       gems: mem.gems - o.price,
       purchasedOutfitIds: [...mem.purchasedOutfitIds, id],
-      selectedOutfitId: id
+      selectedOutfitId: id,
     });
-    notify("ซื้อชุดแล้วค่ะ");
+    notify("ซื้อชุดแล้วค่ะ ✨");
   }
 
-  function addChat(role:"user"|"assistant", content:string) {
-    setMem(prev=>({...prev, chat:[...prev.chat, {role,content}].slice(-30)}));
+  /* ---------- chat ---------- */
+  function addChat(role: "user" | "assistant", content: string) {
+    setMem(prev => ({ ...prev, chat: [...prev.chat, { role, content }].slice(-8) }));
   }
 
-  function speak(text:string) {
+  function speak(text: string) {
     if (!("speechSynthesis" in window)) return setStatus("idle");
     speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text.replace(/[💗💕✨🥺🤗😊🥰📋🍚🌸😮‍💨]/g,""));
+    const u = new SpeechSynthesisUtterance(text.replace(/[💗💕✨🥺🤗😊🥰📋🍚🌸😮‍💨💞]/g, ""));
     u.lang = "th-TH";
     u.pitch = mem.gender === "female" ? 1.12 : 0.88;
     u.rate = 1.03;
@@ -192,31 +239,31 @@ export default function Page() {
     speechSynthesis.speak(u);
   }
 
-  async function sendToAI(text:string) {
+  async function sendToAI(text: string) {
     const msg = text.trim();
     if (!msg) return;
     if (mem.gems <= 0) return notify("เพชรหมดแล้วค่ะ เติมเพชรก่อนคุยต่อนะ");
     addChat("user", msg);
-    setMem(prev=>({...prev, gems: Math.max(0, prev.gems - 1)}));
+    setMem(prev => ({ ...prev, gems: Math.max(0, prev.gems - 1) }));
     setStatus("thinking");
     try {
       const r = await fetch("/api/chat", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: msg,
-          history: mem.chat.slice(-5),
+          history: mem.chat.slice(-4),
           profile: {
             userNickname: mem.userNickname,
             nongnamName: mem.nongnamName,
             gender: mem.gender,
             relationshipMode: mem.relationshipMode,
-            sulkyLevel: mem.sulkyLevel
-          }
-        })
+            sulkyLevel: mem.sulkyLevel,
+          },
+        }),
       });
       const data = await r.json();
-      if (!r.ok) {
+      if (!r.ok && !data?.reply) {
         setStatus("idle");
         return notify(data.error || "น้องน้ำตอบไม่ได้ค่ะ");
       }
@@ -235,49 +282,53 @@ export default function Page() {
     sendToAI(text);
   }
 
-  function cleanup() {
+  /* ---------- voice (กดค้าง→ปล่อย) ---------- */
+  function cleanupVoice() {
     if (timer.current) clearInterval(timer.current);
     timer.current = null;
-    stream.current?.getTracks().forEach(t=>t.stop());
+    stream.current?.getTracks().forEach(t => t.stop());
     stream.current = null;
     rec.current = null;
     chunks.current = [];
     setMs(0);
   }
 
-  async function startRecording(e:any) {
+  async function startRecording(e: any) {
     e.preventDefault(); e.stopPropagation();
     if (status === "recording") return;
-    if (!navigator.mediaDevices?.getUserMedia) return notify("เครื่องนี้ยังใช้ไมค์ในเว็บไม่ได้ค่ะ");
+    if (!navigator.mediaDevices?.getUserMedia) return notify("เครื่องนี้ใช้ไมค์ในเว็บไม่ได้ค่ะ");
     try {
       speechSynthesis?.cancel();
       chunks.current = [];
-      const s = await navigator.mediaDevices.getUserMedia({audio:true});
+      const s = await navigator.mediaDevices.getUserMedia({ audio: true });
       stream.current = s;
       const mt = mimeType();
-      const r = mt ? new MediaRecorder(s,{mimeType:mt}) : new MediaRecorder(s);
+      const r = mt ? new MediaRecorder(s, { mimeType: mt }) : new MediaRecorder(s);
       rec.current = r;
       r.ondataavailable = ev => { if (ev.data?.size) chunks.current.push(ev.data); };
       r.onstop = async () => {
         const elapsed = Date.now() - startAt.current;
         const type = r.mimeType || "audio/webm";
-        const blob = new Blob(chunks.current,{type});
-        cleanup();
-        if (elapsed < 500 || blob.size < 1000) { setStatus("idle"); return notify("เสียงสั้นเกินไป กดค้างแล้วพูดนานขึ้นนิดนึงนะ"); }
+        const blob = new Blob(chunks.current, { type });
+        cleanupVoice();
+        if (elapsed < 500 || blob.size < 1000) {
+          setStatus("idle");
+          return notify("เสียงสั้นเกินไปค่ะ ลองกดค้างนานขึ้นอีกนิด");
+        }
         await transcribe(blob, type);
       };
       startAt.current = Date.now();
       r.start(250);
       setStatus("recording");
-      timer.current = setInterval(()=>setMs(Date.now()-startAt.current),100);
+      timer.current = setInterval(() => setMs(Date.now() - startAt.current), 100);
     } catch {
-      cleanup();
+      cleanupVoice();
       setStatus("idle");
-      notify("ยังเปิดไมค์ไม่ได้ กรุณาอนุญาตไมค์ก่อนนะ");
+      notify("เปิดไมค์ไม่ได้ กรุณาอนุญาตไมค์ก่อนนะ");
     }
   }
 
-  function stopRecording(e:any) {
+  function stopRecording(e: any) {
     e.preventDefault(); e.stopPropagation();
     if (rec.current && rec.current.state !== "inactive") {
       setStatus("transcribing");
@@ -285,18 +336,23 @@ export default function Page() {
     }
   }
 
-  async function transcribe(blob:Blob, type:string) {
+  async function transcribe(blob: Blob, type: string) {
     setStatus("transcribing");
     try {
       const ext = type.includes("mp4") ? "m4a" : type.includes("mpeg") ? "mp3" : "webm";
       const form = new FormData();
-      form.append("audio", new File([blob], `speech.${ext}`, {type}));
-      const r = await fetch("/api/transcribe", {method:"POST", body:form});
+      form.append("audio", new File([blob], `speech.${ext}`, { type }));
+      const r = await fetch("/api/transcribe", { method: "POST", body: form });
       const data = await r.json();
-      if (!r.ok) { setStatus("idle"); return notify("ถอดเสียงไม่สำเร็จค่ะ"); }
+      if (!r.ok) {
+        setStatus("idle");
+        return notify(data?.error === "OPENAI_API_KEY missing"
+          ? "ยังไม่ได้ตั้ง OPENAI_API_KEY — พิมพ์คุยได้ก่อนนะคะ"
+          : "ถอดเสียงไม่สำเร็จค่ะ");
+      }
       const text = String(data.text || "").trim();
       if (!text) { setStatus("idle"); return notify("น้ำยังฟังไม่ชัดเลย ลองใหม่อีกทีนะ"); }
-      setMem(prev=>({...prev, gems: Math.max(0, prev.gems - 2)}));
+      setMem(prev => ({ ...prev, gems: Math.max(0, prev.gems - 2) }));
       sendToAI(text);
     } catch {
       setStatus("idle");
@@ -304,168 +360,409 @@ export default function Page() {
     }
   }
 
-  function fileToDataUrl(file:File) {
-    return new Promise<string>((resolve,reject)=>{
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result));
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
+  /* ---------- reader (ใช้ TTS เท่านั้น ไม่เรียก AI) ---------- */
+  function openBook(b: Book) {
+    if (!mem.purchasedBookIds.includes(b.id)) {
+      if (mem.gems < b.price) return notify("เพชรไม่พอสำหรับปลดล็อกหนังสือ");
+      if (!confirm(`ใช้ ${b.price} เพชรปลดล็อก "${b.title}" ใช่ไหม?`)) return;
+      updateMem({
+        gems: mem.gems - b.price,
+        purchasedBookIds: [...mem.purchasedBookIds, b.id],
+      });
+    }
+    setActiveBook(b);
+    setScreen("reader");
   }
 
-  async function uploadOutfitImage(id:string, file?:File) {
-    if (!file) return;
-    if (supabaseReady && supabase) {
-      const path = `outfits/${id}.jpg`;
-      const { error } = await supabase.storage.from(BUCKET).upload(path, file, { upsert:true, contentType:file.type || "image/jpeg" });
-      if (!error) {
-        const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
-        setAssets(prev=>({...prev, [id]: `${data.publicUrl}?v=${Date.now()}`}));
-        notify("อัปโหลดขึ้น Supabase แล้ว ทุกคนจะเห็นรูปนี้");
-        return;
+  function readAloud() {
+    if (!activeBook) return;
+    speak(activeBook.text);
+  }
+
+  function stopReading() {
+    if ("speechSynthesis" in window) speechSynthesis.cancel();
+    setStatus("idle");
+  }
+
+  /* ---------- pinch-zoom + double-tap reset ---------- */
+  function onAvatarPointerDown(e: React.PointerEvent) {
+    pinch.current.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch.current.pointers.size === 2) {
+      const [a, b] = Array.from(pinch.current.pointers.values());
+      pinch.current.startDist = Math.hypot(a.x - b.x, a.y - b.y);
+      pinch.current.startScale = zoom.scale;
+      pinch.current.active = true;
+    } else if (pinch.current.pointers.size === 1) {
+      // double tap detection
+      const now = Date.now();
+      if (now - pinch.current.lastTap < 350) {
+        setZoom({ scale: 1, x: 0, y: 0 });
+        pinch.current.lastTap = 0;
+      } else {
+        pinch.current.lastTap = now;
       }
-      notify("อัปโหลด Supabase ไม่สำเร็จ ใช้ local แทน");
+      // start drag if zoomed
+      if (zoom.scale > 1.05) {
+        pinch.current.dragging = true;
+        pinch.current.dragStart = { x: e.clientX, y: e.clientY };
+        pinch.current.zoomStart = { x: zoom.x, y: zoom.y };
+      }
     }
-    const data = await fileToDataUrl(file);
-    setAssets(prev=>({...prev, [id]: data}));
-    notify("อัปโหลดในเครื่องนี้แล้ว");
+    (e.target as Element).setPointerCapture?.(e.pointerId);
   }
 
-  async function addBookFile(file?:File) {
-    if (!file) return;
-    const text = await file.text().catch(()=> "");
-    const b:Book = {
-      id:`book_${Date.now()}`,
-      title:file.name.replace(/\.[^.]+$/,""),
-      desc:"หนังสือที่พี่อัปโหลดเอง",
-      price:1,
-      cover:"/assets/books/default_cover.jpg",
-      text:text || "ไฟล์นี้อ่านเป็นข้อความไม่ได้ แนะนำให้อัปโหลด .txt ก่อน"
-    };
-    setBooks(prev=>[b,...prev]);
-    notify("เพิ่มหนังสือแล้ว");
-  }
+  function onAvatarPointerMove(e: React.PointerEvent) {
+    if (!pinch.current.pointers.has(e.pointerId)) return;
+    pinch.current.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-  function readBook(book:Book) {
-    if (!mem.purchasedBookIds.includes(book.id)) {
-      if (mem.gems < book.price) return notify("เพชรไม่พอสำหรับปลดล็อกหนังสือ");
-      updateMem({gems: mem.gems - book.price, purchasedBookIds:[...mem.purchasedBookIds, book.id]});
+    if (pinch.current.active && pinch.current.pointers.size === 2) {
+      const [a, b] = Array.from(pinch.current.pointers.values());
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      const newScale = Math.max(1, Math.min(3, pinch.current.startScale * (dist / pinch.current.startDist)));
+      setZoom(prev => ({ ...prev, scale: newScale }));
+    } else if (pinch.current.dragging && pinch.current.pointers.size === 1) {
+      const dx = e.clientX - pinch.current.dragStart.x;
+      const dy = e.clientY - pinch.current.dragStart.y;
+      setZoom(prev => ({
+        ...prev,
+        x: pinch.current.zoomStart.x + dx,
+        y: pinch.current.zoomStart.y + dy,
+      }));
     }
-    setScreen("chat");
-    addChat("assistant", `${mem.nongnamName} จะอ่านเรื่อง “${book.title}” ให้ฟังนะ`);
-    speak(book.text);
   }
 
-  const statusText = status==="recording" ? `กำลังฟัง ${(ms/1000).toFixed(1)} วิ... ปล่อยเพื่อส่ง`
-    : status==="transcribing" ? "กำลังถอดเสียง..."
-    : status==="thinking" ? "น้องน้ำกำลังคิด..."
-    : status==="speaking" ? "น้องน้ำกำลังพูด..."
-    : "พร้อมคุยกับพี่แล้ว";
+  function onAvatarPointerUp(e: React.PointerEvent) {
+    pinch.current.pointers.delete(e.pointerId);
+    if (pinch.current.pointers.size < 2) pinch.current.active = false;
+    if (pinch.current.pointers.size === 0) {
+      pinch.current.dragging = false;
+      // snap back if scale ~1
+      if (zoom.scale <= 1.05) setZoom({ scale: 1, x: 0, y: 0 });
+    }
+  }
+
+  function onAvatarDoubleClick() {
+    setZoom({ scale: 1, x: 0, y: 0 });
+  }
+
+  /* ---------- studio entry — tap version 5 ครั้งใน settings ---------- */
+  function tapVersion() {
+    const next = versionTaps + 1;
+    if (next >= 5) {
+      setVersionTaps(0);
+      router.push("/studio");
+    } else {
+      setVersionTaps(next);
+      if (next >= 3) notify(`อีก ${5 - next} ครั้งเข้าจัดการไฟล์`);
+    }
+  }
+
+  const statusText =
+    status === "recording" ? `กำลังฟัง ${(ms / 1000).toFixed(1)} วิ... ปล่อยเพื่อส่ง` :
+    status === "transcribing" ? "กำลังถอดเสียง..." :
+    status === "thinking" ? `${mem.nongnamName}กำลังคิด...` :
+    status === "speaking" ? `${mem.nongnamName}กำลังพูด...` :
+    "พร้อมคุยกับพี่แล้ว";
 
   if (!ready) return null;
 
-  return <main className="app">
-    {screen==="welcome" && <section className="screen hero-screen">
-      <div className="badge">Nong Nam Clean Rebuild v1</div>
-      <h1>น้องน้ำ<br/><em>เริ่มใหม่</em></h1>
-      <p>เวอร์ชันสะอาด: ตั้งค่าครั้งเดียว มีหลังบ้าน มีชั้นหนังสือ และรองรับ Supabase Storage</p>
-      <button className="primary" onClick={()=>setScreen(mem.setupDone ? "chat" : "setup")}>เริ่มใช้งาน</button>
-      <button className="secondary" onClick={()=>setScreen("admin")}>🔐 หลังบ้านพี่แมน</button>
-      <button className="secondary" onClick={hardResetCharacterOnly}>รีเซ็ตความจำ/ตั้งค่าใหม่</button>
-    </section>}
+  /* ============================================================
+     RENDER
+     ============================================================ */
+  return (
+    <main className="app">
 
-    {screen==="setup" && <section className="screen">
-      <div className="top"><button className="icon" onClick={()=>setScreen("welcome")}>←</button><div className="brand"><h2>ตั้งค่าน้องน้ำ</h2><p>ทำครั้งแรกครั้งเดียว</p></div><div style={{width:48}}/></div>
-      <div className="setup-card">
-        <label>เลือกเพศน้องน้ำ</label>
-        <div className="choice-row">
-          <button className={mem.gender==="female"?"active":""} onClick={()=>updateMem({gender:"female", selectedOutfitId:"f_001"})}>ผู้หญิง</button>
-          <button className={mem.gender==="male"?"active":""} onClick={()=>updateMem({gender:"male", selectedOutfitId:"m_001"})}>ผู้ชาย</button>
-        </div>
-        <label>ให้น้องน้ำเรียกคุณว่า</label>
-        <input value={mem.userNickname} onChange={e=>updateMem({userNickname:e.target.value})}/>
-        <label>ชื่อน้องน้ำ</label>
-        <input value={mem.nongnamName} onChange={e=>updateMem({nongnamName:e.target.value})}/>
-        <label>โหมดความสัมพันธ์</label>
-        <select value={mem.relationshipMode} onChange={e=>updateMem({relationshipMode:e.target.value})}>
-          <option value="friend">เพื่อนคุย</option>
-          <option value="lover">แฟน</option>
-          <option value="wife">เมีย/คนรักใกล้ชิด</option>
-          <option value="assistant">เลขาส่วนตัว</option>
-        </select>
-        <label>ระดับความงอนน่ารัก</label>
-        <select value={mem.sulkyLevel} onChange={e=>updateMem({sulkyLevel:e.target.value})}>
-          <option value="low">น้อย</option>
-          <option value="medium">กลาง</option>
-          <option value="high">เยอะหน่อย</option>
-        </select>
-      </div>
-      <button className="primary bottom-action" onClick={finishSetup}>บันทึกและเริ่มคุย</button>
-    </section>}
+      {/* ============= WELCOME ============= */}
+      {screen === "welcome" && (
+        <section className="screen hero-screen">
+          <div className="badge">🌸 Nong Nam Companion</div>
+          <h1>ยินดีต้อนรับ<br /><em>น้องน้ำ</em>รออยู่นะ</h1>
+          <p>เพื่อนคุย เลขาส่วนตัว หรือคนที่อยากเล่าเรื่องวันนี้ให้ฟัง — น้องน้ำพร้อมอยู่ข้าง ๆ พี่เสมอ</p>
 
-    {screen==="chat" && <section className="screen chat-screen">
-      <div className="avatar-layer"><img src={currentImage} alt="Nong Nam"/></div>
-      <div className="top floating"><button className="icon" onClick={()=>setScreen("outfits")}>👗</button><div className="pill">{mem.nongnamName}</div><div className="pill">💎 {mem.gems}</div></div>
-      <div className={`status ${status}`}>{statusText}</div>
-      <div className="latest-line">{mem.chat.slice(-1).map((m,i)=><span key={i} className={m.role==="user"?"latest-user":"latest-ai"}>{m.content}</span>)}</div>
-      <div className="chat-history">
-        {mem.chat.slice(-12).map((m,i)=><div key={i} className={`bubble ${m.role}`}>
-          <b>{m.role==="user"?mem.userNickname:mem.nongnamName}</b>
-          <span>{m.content}</span>
-        </div>)}
-      </div>
-      <div className="quick-bar">
-        <button onClick={()=>sendToAI("วันนี้เหนื่อยมากเลย")}>เหนื่อย</button>
-        <button onClick={()=>sendToAI("โดนหัวหน้าดุ")}>โดนดุ</button>
-        <button onClick={()=>sendToAI("คิดถึง")}>คิดถึง</button>
-        <button onClick={()=>setScreen("books")}>📚 หนังสือ</button>
-      </div>
-      <div className="bottom-control">
-        <button className={`mic ${status==="recording"?"active":""}`} onPointerDown={startRecording} onPointerUp={stopRecording} onPointerCancel={stopRecording}>{status==="recording"?"🔴":"🎙"}</button>
-        <div className="hint">กดค้างไว้แล้วพูด • ปล่อยเพื่อส่ง</div>
-        <div className="input-row"><input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")sendText()}} placeholder="พิมพ์คุยกับน้องน้ำ..."/><button onClick={sendText}>➤</button></div>
-        <div className="mini-nav"><button onClick={()=>setScreen("outfits")}>ชุด</button><button onClick={()=>setScreen("books")}>ชั้นหนังสือ</button><button onClick={()=>setScreen("settings")}>ตั้งค่า</button></div>
-      </div>
-    </section>}
+          <div className="welcome-cards">
+            <button className="welcome-card female" onClick={() => pickGender("female")}>
+              <div className="welcome-card-img">
+                <img src="/assets/ui/female-card.jpg" alt="น้องน้ำผู้หญิง"
+                  onError={(e) => { (e.currentTarget as HTMLImageElement).src = "/assets/outfits/female/f_001.jpg"; }} />
+              </div>
+              <div className="welcome-card-meta">
+                <b>น้องน้ำ ♀</b><span>อบอุ่น อ่อนโยน</span>
+              </div>
+            </button>
+            <button className="welcome-card male" onClick={() => pickGender("male")}>
+              <div className="welcome-card-img">
+                <img src="/assets/ui/male-card.jpg" alt="น้องน้ำผู้ชาย"
+                  onError={(e) => { (e.currentTarget as HTMLImageElement).src = "/assets/outfits/male/m_001.jpg"; }} />
+              </div>
+              <div className="welcome-card-meta">
+                <b>น้องน้ำ ♂</b><span>สุภาพ พึ่งพาได้</span>
+              </div>
+            </button>
+          </div>
 
-    {screen==="outfits" && <section className="screen">
-      <div className="top"><button className="icon" onClick={()=>setScreen("chat")}>←</button><div className="brand"><h2>ชุดน้องน้ำ</h2><p>เลือก/ซื้อ/ทดสอบชุด</p></div><button className="icon" onClick={()=>setScreen("admin")}>🔐</button></div>
-      <div className="tabs"><button className={category==="regular"?"active":""} onClick={()=>setCategory("regular")}>ทั่วไป</button>{mem.gender==="female" && <button className={category==="special20"?"active adult":""} onClick={()=>setCategory("special20")}>20+</button>}</div>
-      <div className="outfit-grid">{visibleOutfits.map(o=><div className="outfit-card" key={o.id}>
-        <img src={assets[o.id] || o.defaultImage}/>
-        {o.ageRestricted && <div className="adult-badge">20+</div>}
-        <b>{o.title}</b><p>{o.desc}</p><span>{o.price===0?"ฟรี":`💎 ${o.price}`}</span>
-        {isUnlocked(o.id) ? <button onClick={()=>selectOutfit(o.id)}>ใช้ชุดนี้</button> : <button onClick={()=>buyOutfit(o.id)}>ซื้อ/ปลดล็อก</button>}
-      </div>)}</div>
-    </section>}
+          {mem.setupDone && (
+            <button className="secondary" onClick={() => setScreen("chat")}>กลับเข้าแชต →</button>
+          )}
+        </section>
+      )}
 
-    {screen==="books" && <section className="screen">
-      <div className="top"><button className="icon" onClick={()=>setScreen("chat")}>←</button><div className="brand"><h2>ชั้นหนังสือ</h2><p>อ่านให้ฟัง ไม่ใช้โทเค็น AI</p></div><button className="icon" onClick={()=>setScreen("admin")}>＋</button></div>
-      <div className="book-list">{books.map(b=><div className="book-card" key={b.id}>
-        <img src={b.cover}/>
-        <div><b>{b.title}</b><p>{b.desc}</p><span>💎 {b.price}</span></div>
-        <button onClick={()=>readBook(b)}>ให้อ่าน</button>
-      </div>)}</div>
-    </section>}
+      {/* ============= SETUP ============= */}
+      {screen === "setup" && (
+        <section className="screen">
+          <div className="top">
+            <button className="icon" onClick={() => setScreen("welcome")}>←</button>
+            <div className="brand"><h2>ตั้งค่าน้องน้ำ</h2><p>ทำครั้งแรกครั้งเดียว</p></div>
+            <div style={{ width: 48 }} />
+          </div>
+          <div className="setup-card">
+            <label>เลือกเพศน้องน้ำ</label>
+            <div className="choice-row">
+              <button className={mem.gender === "female" ? "active" : ""}
+                onClick={() => updateMem({ gender: "female", selectedOutfitId: "f_001" })}>ผู้หญิง</button>
+              <button className={mem.gender === "male" ? "active" : ""}
+                onClick={() => updateMem({ gender: "male", selectedOutfitId: "m_001" })}>ผู้ชาย</button>
+            </div>
+            <label>ให้น้องน้ำเรียกคุณว่า</label>
+            <input value={mem.userNickname} onChange={e => updateMem({ userNickname: e.target.value })} />
+            <label>ชื่อน้องน้ำ</label>
+            <input value={mem.nongnamName} onChange={e => updateMem({ nongnamName: e.target.value })} />
+            <label>โหมดความสัมพันธ์</label>
+            <select value={mem.relationshipMode} onChange={e => updateMem({ relationshipMode: e.target.value as any })}>
+              <option value="friend">เพื่อนคุย</option>
+              <option value="lover">แฟน/คนรัก</option>
+              <option value="wife">ที่พึ่งทางใจ</option>
+              <option value="assistant">เลขาส่วนตัว</option>
+            </select>
+            <label>ระดับความงอนน่ารัก</label>
+            <select value={mem.sulkyLevel} onChange={e => updateMem({ sulkyLevel: e.target.value as any })}>
+              <option value="low">น้อย</option>
+              <option value="medium">กลาง</option>
+              <option value="high">เยอะหน่อย</option>
+            </select>
+          </div>
+          <button className="primary bottom-action" onClick={finishSetup}>บันทึกและเริ่มคุย</button>
+        </section>
+      )}
 
-    {screen==="settings" && <section className="screen">
-      <div className="top"><button className="icon" onClick={()=>setScreen("chat")}>←</button><div className="brand"><h2>ตั้งค่า</h2><p>แก้ข้อมูลโดยไม่คืนเครดิต</p></div><div style={{width:48}}/></div>
-      <button className="secondary full" onClick={()=>setScreen("setup")}>แก้โปรไฟล์น้องน้ำ</button>
-      <button className="secondary full" onClick={hardResetCharacterOnly}>รีเซ็ตความจำ/ตั้งค่าใหม่</button>
-      <button className="secondary full" onClick={()=>setScreen("admin")}>หลังบ้านพี่แมน</button>
-    </section>}
+      {/* ============= CHAT (avatar-centered) ============= */}
+      {screen === "chat" && (
+        <section className="screen chat-screen">
+          {/* avatar layer with pinch-zoom */}
+          <div className="avatar-layer"
+            ref={stageRef}
+            onPointerDown={onAvatarPointerDown}
+            onPointerMove={onAvatarPointerMove}
+            onPointerUp={onAvatarPointerUp}
+            onPointerCancel={onAvatarPointerUp}
+            onDoubleClick={onAvatarDoubleClick}
+            style={{ touchAction: "none" }}
+          >
+            <img
+              src={currentChatImage}
+              alt={mem.nongnamName}
+              draggable={false}
+              style={{
+                transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`,
+                transformOrigin: "center center",
+                transition: pinch.current.active || pinch.current.dragging ? "none" : "transform .25s ease",
+              }}
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).src = `/assets/avatars/${mem.gender}/default.jpg`;
+              }}
+            />
+          </div>
 
-    {screen==="admin" && <section className="screen">
-      <div className="top"><button className="icon" onClick={()=>setScreen(mem.setupDone?"chat":"welcome")}>←</button><div className="brand"><h2>หลังบ้านพี่แมน</h2><p>อัปโหลดรูป/หนังสือ</p></div><div style={{width:48}}/></div>
-      {!adminOk ? <div className="setup-card"><label>รหัสหลังบ้าน</label><input value={adminPin} onChange={e=>setAdminPin(e.target.value)} placeholder="2468"/><button className="primary full" onClick={()=> adminPin===ADMIN_PIN ? setAdminOk(true) : notify("รหัสไม่ถูกค่ะ")}>เข้าสู่หลังบ้าน</button><p>ถ้าใส่ Supabase key แล้ว รูปจะอัปโหลดให้ทุกคนเห็นได้</p></div> : <div className="admin-panel">
-        <div className="admin-note">{supabaseReady ? "Supabase พร้อมใช้งาน: อัปโหลดแล้วทุกคนจะเห็นรูปเดียวกัน" : "ยังไม่ได้ตั้งค่า Supabase: รูปที่อัปโหลดจะเห็นเฉพาะเครื่องนี้ก่อน"}</div>
-        <h3>จัดการรูปชุด</h3>
-        <div className="admin-grid">{outfits.map(o=><div className="admin-item" key={o.id}><img src={assets[o.id] || o.defaultImage}/><b>{o.title}</b><small>{o.id}</small><input type="file" accept="image/*" onChange={e=>uploadOutfitImage(o.id,e.target.files?.[0])}/></div>)}</div>
-        <h3>เพิ่มหนังสือ (.txt ดีที่สุด)</h3>
-        <div className="setup-card"><input type="file" accept=".txt,.md" onChange={e=>addBookFile(e.target.files?.[0])}/><p>Word ให้คัดลอกเป็น .txt ก่อนในเวอร์ชันนี้</p></div>
-      </div>}
-    </section>}
+          {/* top floating row: bookshelf-left, name+gems-right */}
+          <div className="chat-top-left">
+            <button className="icon" onClick={() => setScreen("books")} title="ชั้นหนังสือ">📚</button>
+          </div>
+          <div className="chat-top-right">
+            <div className="pill">{mem.nongnamName}</div>
+            <div className="pill gems">💎 {mem.gems}</div>
+          </div>
 
-    {toast && <div className="toast">{toast}</div>}
-  </main>
+          {/* outfit button - right side mid */}
+          <button className="floating-outfit" onClick={() => setScreen("outfits")} title="เปลี่ยนชุด">👗</button>
+
+          <div className={`status ${status}`}>{statusText}</div>
+
+          {/* bubbles — only last 3, fade upward */}
+          <div className="bubble-stack">
+            {mem.chat.slice(-3).map((m, i, arr) => (
+              <div
+                key={`${arr.length - 1 - i}-${i}`}
+                className={`bubble-line ${m.role} idx-${arr.length - 1 - i}`}
+              >
+                <span>{m.content}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="quick-bar">
+            <button onClick={() => sendToAI("วันนี้เหนื่อยมากเลย")}>เหนื่อย</button>
+            <button onClick={() => sendToAI("โดนหัวหน้าดุ")}>โดนดุ</button>
+            <button onClick={() => sendToAI("คิดถึง")}>คิดถึง</button>
+            <button onClick={() => sendToAI("กินข้าวหรือยัง")}>ทักเรื่องข้าว</button>
+          </div>
+
+          <div className="bottom-control">
+            <button
+              className={`mic ${status === "recording" ? "active" : ""}`}
+              onPointerDown={startRecording}
+              onPointerUp={stopRecording}
+              onPointerCancel={stopRecording}
+            >{status === "recording" ? "🔴" : "🎙"}</button>
+            <div className="hint">กดค้างไว้แล้วพูด • ปล่อยเพื่อส่ง</div>
+            <div className="input-row">
+              <input
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") sendText(); }}
+                placeholder="พิมพ์คุยกับน้องน้ำ..."
+              />
+              <button onClick={sendText}>➤</button>
+            </div>
+            <div className="mini-nav">
+              <button onClick={() => setScreen("outfits")}>ชุด</button>
+              <button onClick={() => setScreen("books")}>ชั้นหนังสือ</button>
+              <button onClick={() => setScreen("settings")}>ตั้งค่า</button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* ============= OUTFITS ============= */}
+      {screen === "outfits" && (
+        <section className="screen">
+          <div className="top">
+            <button className="icon" onClick={() => setScreen("chat")}>←</button>
+            <div className="brand"><h2>ชุดน้องน้ำ</h2><p>เลือก/ซื้อ/ทดสอบชุด</p></div>
+            <div style={{ width: 48 }} />
+          </div>
+          <div className="tabs">
+            <button className={category === "regular" ? "active" : ""} onClick={() => setCategory("regular")}>ทั่วไป</button>
+            {mem.gender === "female" && (
+              <button className={category === "special20" ? "active adult" : ""} onClick={() => setCategory("special20")}>20+</button>
+            )}
+          </div>
+          <div className="outfit-grid">
+            {visibleOutfits.map(o => (
+              <div className="outfit-card" key={o.id}>
+                <img
+                  src={assets[`${o.id}_chat`] || o.chatImage}
+                  onError={(e) => {
+                    (e.currentTarget as HTMLImageElement).src = `/assets/avatars/${o.gender}/default.jpg`;
+                  }}
+                />
+                {o.ageRestricted && <div className="adult-badge">20+</div>}
+                <b>{o.title}</b>
+                <p>{o.desc}</p>
+                <span>{o.price === 0 ? "ฟรี" : `💎 ${o.price}`}</span>
+                <div className="outfit-status">
+                  {isUnlocked(o.id) ? "✓ ปลดล็อกแล้ว" : "🔒 ต้องใช้เพชร"}
+                </div>
+                {isUnlocked(o.id) ? (
+                  <button onClick={() => selectOutfit(o.id)}>
+                    {mem.selectedOutfitId === o.id ? "ใช้อยู่" : "ใช้ชุดนี้"}
+                  </button>
+                ) : (
+                  <button onClick={() => buyOutfit(o.id)}>ปลดล็อก</button>
+                )}
+              </div>
+            ))}
+            {visibleOutfits.length === 0 && (
+              <div style={{ gridColumn: "1 / -1", textAlign: "center", color: "var(--muted)", padding: 24 }}>
+                ยังไม่มีชุดในหมวดนี้
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {/* ============= BOOKSHELF ============= */}
+      {screen === "books" && (
+        <section className="screen">
+          <div className="top">
+            <button className="icon" onClick={() => setScreen("chat")}>←</button>
+            <div className="brand"><h2>ชั้นหนังสือ</h2><p>อ่านให้ฟัง ไม่ใช้โทเค็น AI</p></div>
+            <div style={{ width: 48 }} />
+          </div>
+          <div className="book-cats">
+            <button className={bookCat === "all" ? "active" : ""} onClick={() => setBookCat("all")}>ทั้งหมด</button>
+            {BOOK_CATEGORIES.map(c => (
+              <button key={c.key} className={bookCat === c.key ? "active" : ""} onClick={() => setBookCat(c.key)}>
+                {c.emoji} {c.label}
+              </button>
+            ))}
+          </div>
+          <div className="book-list">
+            {visibleBooks.map(b => (
+              <div className="book-card" key={b.id}>
+                <img src={b.cover} onError={(e) => { (e.currentTarget as HTMLImageElement).src = "/assets/books/default_cover.jpg"; }} />
+                <div className="book-card-meta">
+                  <b>{b.title}</b>
+                  <p>{b.desc}</p>
+                  <span>
+                    {mem.purchasedBookIds.includes(b.id) ? "✓ ปลดล็อกแล้ว" : `💎 ${b.price}`}
+                  </span>
+                </div>
+                <button onClick={() => openBook(b)}>เลือกเล่มนี้</button>
+              </div>
+            ))}
+            {visibleBooks.length === 0 && (
+              <div style={{ textAlign: "center", color: "var(--muted)", padding: 24 }}>
+                ยังไม่มีหนังสือในหมวดนี้
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {/* ============= READER ============= */}
+      {screen === "reader" && activeBook && (
+        <section className="screen reader-screen">
+          <div className="reader-bg">
+            <img src={currentBookImage} alt="" onError={(e) => {
+              (e.currentTarget as HTMLImageElement).src = `/assets/avatars/${mem.gender}/default.jpg`;
+            }} />
+          </div>
+          <div className="top floating">
+            <button className="icon" onClick={() => { stopReading(); setScreen("books"); }}>←</button>
+            <div className="brand"><h2>{activeBook.title}</h2><p>{mem.nongnamName}กำลังอ่านให้ฟัง</p></div>
+            <div style={{ width: 48 }} />
+          </div>
+          <div className="reader-content">
+            <div className="reader-text">{activeBook.text}</div>
+            <div className="reader-actions">
+              <button className="primary" onClick={readAloud}>🔊 อ่านให้ฟัง</button>
+              <button className="secondary" onClick={stopReading}>⏸ หยุด</button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* ============= SETTINGS ============= */}
+      {screen === "settings" && (
+        <section className="screen">
+          <div className="top">
+            <button className="icon" onClick={() => setScreen("chat")}>←</button>
+            <div className="brand"><h2>ตั้งค่า</h2><p>แก้ข้อมูลโดยไม่คืนเครดิต</p></div>
+            <div style={{ width: 48 }} />
+          </div>
+          <button className="secondary full" onClick={() => setScreen("setup")}>แก้โปรไฟล์น้องน้ำ</button>
+          <button className="secondary full" onClick={doResetCharacter}>รีเซ็ตความจำ/ตั้งค่าใหม่</button>
+          <div style={{ marginTop: "auto", padding: 20, textAlign: "center" }}>
+            <button
+              onClick={tapVersion}
+              style={{ background: "transparent", color: "var(--muted)", fontSize: 12 }}
+            >
+              {APP_VERSION}
+            </button>
+          </div>
+        </section>
+      )}
+
+      {toast && <div className="toast">{toast}</div>}
+    </main>
+  );
 }

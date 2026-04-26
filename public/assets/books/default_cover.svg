@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 320" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0%" stop-color="#fff5f8"/>
+      <stop offset="50%" stop-color="#ffd9e3"/>
+      <stop offset="100%" stop-color="#f4a8b5"/>
+    </linearGradient>
+    <linearGradient id="spine" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0%" stop-color="#d46476"/>
+      <stop offset="100%" stop-color="#e8919e"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="40%" r="50%">
+      <stop offset="0%" stop-color="rgba(255,255,255,0.6)"/>
+      <stop offset="100%" stop-color="rgba(255,255,255,0)"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Book cover background -->
+  <rect width="240" height="320" fill="url(#bg)" rx="8"/>
+
+  <!-- Decorative spine -->
+  <rect x="0" y="0" width="14" height="320" fill="url(#spine)"/>
+
+  <!-- Soft glow -->
+  <rect width="240" height="320" fill="url(#glow)" rx="8"/>
+
+  <!-- Decorative flowers -->
+  <g transform="translate(180, 50)" opacity="0.7">
+    <circle cx="0" cy="0" r="14" fill="#d46476"/>
+    <circle cx="-12" cy="-8" r="10" fill="#e8919e"/>
+    <circle cx="12" cy="-8" r="10" fill="#e8919e"/>
+    <circle cx="-12" cy="8" r="10" fill="#e8919e"/>
+    <circle cx="12" cy="8" r="10" fill="#e8919e"/>
+    <circle cx="0" cy="0" r="6" fill="#fff" opacity="0.85"/>
+  </g>
+
+  <g transform="translate(50, 250)" opacity="0.55">
+    <circle cx="0" cy="0" r="9" fill="#d46476"/>
+    <circle cx="-7" cy="-5" r="7" fill="#e8919e"/>
+    <circle cx="7" cy="-5" r="7" fill="#e8919e"/>
+    <circle cx="-7" cy="5" r="7" fill="#e8919e"/>
+    <circle cx="7" cy="5" r="7" fill="#e8919e"/>
+    <circle cx="0" cy="0" r="4" fill="#fff" opacity="0.85"/>
+  </g>
+
+  <!-- Title placeholder lines -->
+  <rect x="38" y="120" width="170" height="8" rx="4" fill="rgba(54,37,52,0.18)"/>
+  <rect x="38" y="138" width="120" height="8" rx="4" fill="rgba(54,37,52,0.18)"/>
+  <rect x="38" y="156" width="140" height="8" rx="4" fill="rgba(54,37,52,0.12)"/>
+
+  <!-- Brand mark bottom -->
+  <text x="120" y="295" text-anchor="middle"
+    font-family="-apple-system, 'Noto Sans Thai', sans-serif"
+    font-size="14" font-weight="700"
+    fill="rgba(54,37,52,0.55)" letter-spacing="0.5">
+    ✿ Nong Nam Library
+  </text>
+</svg>

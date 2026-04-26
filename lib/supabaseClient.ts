@@ -1,15 +1,6 @@
-
-import { createClient } from "@supabase/supabase-js";
-
-export function hasSupabaseConfig() {
-  return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
-}
-
-export function getSupabaseBrowserClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !key) return null;
-  return createClient(url, key);
-}
-
-export const BUCKET = process.env.NEXT_PUBLIC_SUPABASE_BUCKET || "nongnam-assets";
+// Backward compatibility — re-exports from ./supabase.ts
+export {
+  BUCKET,
+  hasSupabaseConfig,
+  getSupabaseBrowserClient,
+} from "./supabase";
