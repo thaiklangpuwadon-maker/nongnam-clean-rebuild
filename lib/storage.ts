@@ -24,7 +24,13 @@ export type UserMemory = {
   userNickname: string;
   nongnamName: string;
   relationshipMode: "friend" | "lover" | "wife" | "assistant";
+  personalityStyle: "sweet" | "shy" | "playful" | "jealous" | "strict" | "bold" | "comfort";
   sulkyLevel: "low" | "medium" | "high";
+  jealousLevel: "low" | "medium" | "high";
+  affectionStyle: "soft" | "normal" | "spicy_safe";
+  nongnamAge: number;
+  ownerMode: boolean;
+  voiceEnabled: boolean;
   selectedOutfitId: string;
   age20Confirmed: boolean;
   gems: number;
@@ -40,7 +46,13 @@ export const DEFAULT_USER_MEMORY: UserMemory = {
   userNickname: "พี่",
   nongnamName: "น้องน้ำ",
   relationshipMode: "lover",
+  personalityStyle: "sweet",
   sulkyLevel: "medium",
+  jealousLevel: "medium",
+  affectionStyle: "normal",
+  nongnamAge: 25,
+  ownerMode: false,
+  voiceEnabled: false,
   selectedOutfitId: "f_001",
   age20Confirmed: false,
   gems: STARTING_GEMS,

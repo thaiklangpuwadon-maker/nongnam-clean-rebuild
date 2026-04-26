@@ -698,23 +698,88 @@ p { color: var(--muted); line-height: 1.55; }
 }
 
 
-.avatar-bob {
+/* ===== v3 final patch ===== */
+.avatar-layer {
+  pointer-events: auto;
+}
+.avatar-layer img {
+  animation: nongnamSoftFloat 4.5s ease-in-out infinite;
+}
+@keyframes nongnamSoftFloat {
+  0% { filter: saturate(1.02); }
+  50% { filter: saturate(1.08) brightness(1.02); }
+  100% { filter: saturate(1.02); }
+}
+.chat-top-left {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.outfit-img-wrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  overflow: hidden;
+  border-radius: 18px;
+  background: #f8e7ef;
+}
+.outfit-img-wrap img {
   width: 100%;
   height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  animation: nongnamFloat 4.2s ease-in-out infinite;
+  object-fit: cover;
+  object-position: center top;
+  border-radius: 18px;
 }
-.avatar-bob.paused { animation-play-state: paused; }
-@keyframes nongnamFloat {
-  0% { transform: translateY(0px); }
-  50% { transform: translateY(-8px); }
-  100% { transform: translateY(0px); }
+.outfit-img-wrap.locked-blur img {
+  filter: blur(10px) brightness(.72) saturate(.88);
+  transform: scale(1.05);
+}
+.locked-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  color: #fff;
+  font-weight: 950;
+  font-size: 14px;
+  line-height: 1.4;
+  text-shadow: 0 2px 12px rgba(0,0,0,.65);
+  background: radial-gradient(circle, rgba(0,0,0,.08), rgba(0,0,0,.38));
+}
+.outfit-card > img {
+  display: none;
+}
+.owner-ribbon {
+  position: absolute;
+  left: 12px;
+  top: 120px;
+  z-index: 8;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.86);
+  color: #d84c75;
+  font-weight: 950;
+  font-size: 11px;
+}
+.setup-card select,
+.setup-card input {
+  width: 100%;
 }
 .quick-bar {
+  bottom: 206px;
   flex-wrap: wrap;
+  max-height: 84px;
+  overflow-y: auto;
 }
-.welcome-card-img img {
-  object-position: center top;
+.quick-bar button {
+  min-height: 34px;
+}
+.bubble-stack {
+  bottom: 300px;
+}
+@media (max-height: 740px) {
+  .bubble-stack { bottom: 282px; }
+  .quick-bar { bottom: 194px; }
+  .mic { width: 68px; height: 68px; font-size: 28px; }
 }

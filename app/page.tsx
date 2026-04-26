@@ -32,7 +32,8 @@ import {
 type Screen = "welcome" | "setup" | "chat" | "outfits" | "books" | "reader" | "settings";
 type Status = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
 
-const APP_VERSION = "v2.0.0";
+const APP_VERSION = "v3-final-today";
+const OWNER_KEY = "nongnam_owner_mode_v3";
 
 function mimeType(): string {
   const list = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/mpeg"];
@@ -114,6 +115,9 @@ export default function Page() {
     const savedAssets = loadJSON<Record<string, string>>(LOCAL_ASSETS_KEY, {});
     setAssets(savedAssets);
 
+    const owner = typeof window !== "undefined" && localStorage.getItem(OWNER_KEY) === "true";
+    if (owner) merged.ownerMode = true;
+
     const savedManifest = loadLocalManifest();
     setManifest(savedManifest);
 
@@ -161,6 +165,7 @@ export default function Page() {
     setMem(prev => ({ ...prev, ...patch }));
   }
   function isUnlocked(id: string) {
+    if (mem.ownerMode) return true;
     return mem.purchasedOutfitIds.includes(id);
   }
 
@@ -197,7 +202,7 @@ export default function Page() {
   function selectOutfit(id: string) {
     const o = allOutfits.find(x => x.id === id);
     if (!o) return;
-    if (o.ageRestricted && !mem.age20Confirmed) {
+    if (o.ageRestricted && !mem.age20Confirmed && !mem.ownerMode) {
       const ok = confirm("หมวดนี้สำหรับผู้ใช้อายุ 20 ปีขึ้นไป\nคุณยืนยันหรือไม่ว่าอายุ 20 ปีขึ้นไป?");
       if (!ok) return;
       updateMem({ age20Confirmed: true });
@@ -210,6 +215,7 @@ export default function Page() {
   function buyOutfit(id: string) {
     const o = allOutfits.find(x => x.id === id);
     if (!o) return;
+    if (mem.ownerMode) return selectOutfit(id);
     if (mem.purchasedOutfitIds.includes(id)) return selectOutfit(id);
     if (mem.gems < o.price) return notify("เพชรไม่พอค่ะ");
     if (!confirm(`ใช้ ${o.price} เพชรปลดล็อก "${o.title}" ใช่ไหม?`)) return;
@@ -228,19 +234,40 @@ export default function Page() {
 
   function speak(text: string) {
     if (!("speechSynthesis" in window)) return setStatus("idle");
-    speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text.replace(/[💗💕✨🥺🤗😊🥰📋🍚🌸😮‍💨💞]/g, ""));
-    u.lang = "th-TH";
-    u.pitch = mem.gender === "female" ? 1.12 : 0.88;
-    u.rate = 1.03;
-    u.onstart = () => setStatus("speaking");
-    u.onend = () => setStatus("idle");
-    u.onerror = () => setStatus("idle");
-    speechSynthesis.speak(u);
+    try {
+      speechSynthesis.cancel();
+      speechSynthesis.resume();
+      const clean = text.replace(/[💗💕✨🥺🤗😊🥰📋🍚🌸😮‍💨💞]/g, "");
+      const u = new SpeechSynthesisUtterance(clean);
+      u.lang = "th-TH";
+      u.pitch = mem.gender === "female" ? 1.12 : 0.88;
+      u.rate = 1.03;
+      const voices = speechSynthesis.getVoices?.() || [];
+      const thVoice = voices.find(v => /th|Thai/i.test(v.lang + " " + v.name));
+      if (thVoice) u.voice = thVoice;
+      u.onstart = () => setStatus("speaking");
+      u.onend = () => setStatus("idle");
+      u.onerror = () => setStatus("idle");
+      speechSynthesis.speak(u);
+      setTimeout(() => speechSynthesis.resume(), 250);
+    } catch {
+      setStatus("idle");
+    }
   }
 
-  function isBookIntent(text: string) {
-    return /(อ่านหนังสือ|เล่านิทาน|ชั้นหนังสือ|หนังสือให้ฟัง|อ่านให้ฟัง)/.test(text);
+  function enableVoice() {
+    if (!("speechSynthesis" in window)) return notify("เครื่องนี้ไม่รองรับเสียงอ่าน");
+    updateMem({ voiceEnabled: true });
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance("เปิดเสียงน้องน้ำแล้วค่ะ");
+    u.lang = "th-TH";
+    u.rate = 1.05;
+    speechSynthesis.speak(u);
+    notify("เปิดเสียงแล้ว ถ้า iPhone ยังเงียบ ให้กดเปิดเสียงอีกครั้ง");
+  }
+
+  function isBookIntent(msg: string) {
+    return /(อ่านหนังสือ|เล่านิทาน|ชั้นหนังสือ|หนังสือให้ฟัง|อ่านให้ฟัง|เรื่องผี)/.test(msg);
   }
 
   async function sendToAI(text: string) {
@@ -249,16 +276,16 @@ export default function Page() {
 
     if (isBookIntent(msg)) {
       addChat("user", msg);
-      const canned = `โอเคค่ะพี่ เลือกหนังสือได้เลยนะคะ 💗 ในคลังมีทั้งกำลังใจ นิทาน เรื่องผี ความรัก และความรู้ เดี๋ยว${mem.nongnamName}อ่านให้ฟังได้เลย`;
-      addChat("assistant", canned);
+      const reply = `ได้เลยค่ะพี่ เลือกหนังสือในชั้นหนังสือได้เลยนะคะ 💗 มีทั้งกำลังใจ เรื่องผี ความรัก และบทความสั้น ๆ เดี๋ยว${mem.nongnamName}อ่านให้ฟังเอง`;
+      addChat("assistant", reply);
       setScreen("books");
-      speak(canned);
+      speak(reply);
       return;
     }
 
-    if (mem.gems <= 0) return notify("เพชรหมดแล้วค่ะ เติมเพชรก่อนคุยต่อนะ");
+    if (!mem.ownerMode && mem.gems <= 0) return notify("เพชรหมดแล้วค่ะ เติมเพชรก่อนคุยต่อนะ");
     addChat("user", msg);
-    setMem(prev => ({ ...prev, gems: Math.max(0, prev.gems - 1) }));
+    if (!mem.ownerMode) setMem(prev => ({ ...prev, gems: Math.max(0, prev.gems - 1) }));
     setStatus("thinking");
     try {
       const r = await fetch("/api/chat", {
@@ -272,7 +299,11 @@ export default function Page() {
             nongnamName: mem.nongnamName,
             gender: mem.gender,
             relationshipMode: mem.relationshipMode,
+            personalityStyle: mem.personalityStyle,
             sulkyLevel: mem.sulkyLevel,
+            jealousLevel: mem.jealousLevel,
+            affectionStyle: mem.affectionStyle,
+            nongnamAge: mem.nongnamAge,
           },
         }),
       });
@@ -462,10 +493,15 @@ export default function Page() {
   /* ---------- studio entry — tap version 5 ครั้งใน settings ---------- */
   function tapVersion() {
     const next = versionTaps + 1;
+    setVersionTaps(next);
     if (next >= 5) {
+      const nextOwner = !mem.ownerMode;
+      updateMem({ ownerMode: nextOwner });
+      if (typeof window !== "undefined") localStorage.setItem(OWNER_KEY, nextOwner ? "true" : "false");
+      notify(nextOwner ? "เปิดโหมดเจ้าของแล้ว: เพชรไม่จำกัด / ปลดล็อกทุกชุด" : "ปิดโหมดเจ้าของแล้ว");
       setVersionTaps(0);
-      router.push("/studio");
-    } else {
+    }
+  } else {
       setVersionTaps(next);
       if (next >= 3) notify(`อีก ${5 - next} ครั้งเข้าจัดการไฟล์`);
     }
@@ -491,7 +527,7 @@ export default function Page() {
         <section className="screen hero-screen">
           <div className="badge">🌸 Nong Nam Companion</div>
           <h1>ยินดีต้อนรับ<br /><em>น้องน้ำ</em>รออยู่นะ</h1>
-          <p>เลือกได้เลยว่าจะเอาน้องน้ำผู้หญิงหรือน้องน้ำผู้ชาย แล้วค่อยตั้งค่าเพียงครั้งเดียว จากนั้นครั้งต่อไปเข้าแชตได้เลย</p>
+          <p>เพื่อนคุย เลขาส่วนตัว หรือคนที่อยากเล่าเรื่องวันนี้ให้ฟัง — น้องน้ำพร้อมอยู่ข้าง ๆ พี่เสมอ</p>
 
           <div className="welcome-cards">
             <button className="welcome-card female" onClick={() => pickGender("female")}>
@@ -540,6 +576,18 @@ export default function Page() {
             <input value={mem.userNickname} onChange={e => updateMem({ userNickname: e.target.value })} />
             <label>ชื่อน้องน้ำ</label>
             <input value={mem.nongnamName} onChange={e => updateMem({ nongnamName: e.target.value })} />
+            <label>อายุน้องน้ำ</label>
+            <input type="number" min={18} max={60} value={mem.nongnamAge || 25} onChange={e => updateMem({ nongnamAge: Number(e.target.value || 25) })} />
+            <label>บุคลิกหลัก</label>
+            <select value={mem.personalityStyle || "sweet"} onChange={e => updateMem({ personalityStyle: e.target.value as any })}>
+              <option value="sweet">หวาน ออดอ้อน น่ารัก</option>
+              <option value="shy">ขี้อาย ใส ๆ พูดนุ่ม</option>
+              <option value="playful">ขี้เล่น หยอดเก่ง</option>
+              <option value="jealous">ขี้หึง ขี้งอน แต่ง้อก็หาย</option>
+              <option value="strict">สายดุ บ่นเก่ง เหมือนเมียจริง</option>
+              <option value="bold">พูดตรง แซ่บ แต่ไม่หยาบเกิน</option>
+              <option value="comfort">สายปลอบใจ รับฟังเก่ง</option>
+            </select>
             <label>โหมดความสัมพันธ์</label>
             <select value={mem.relationshipMode} onChange={e => updateMem({ relationshipMode: e.target.value as any })}>
               <option value="friend">เพื่อนคุย</option>
@@ -552,6 +600,18 @@ export default function Page() {
               <option value="low">น้อย</option>
               <option value="medium">กลาง</option>
               <option value="high">เยอะหน่อย</option>
+            </select>
+            <label>ระดับความหึงหวง</label>
+            <select value={mem.jealousLevel || "medium"} onChange={e => updateMem({ jealousLevel: e.target.value as any })}>
+              <option value="low">นิดหน่อย</option>
+              <option value="medium">พอดีน่ารัก</option>
+              <option value="high">หึงง่าย ง้อได้</option>
+            </select>
+            <label>โทนความใกล้ชิด</label>
+            <select value={mem.affectionStyle || "normal"} onChange={e => updateMem({ affectionStyle: e.target.value as any })}>
+              <option value="soft">ใส ๆ อ่อนโยน</option>
+              <option value="normal">แฟนสาวอบอุ่น</option>
+              <option value="spicy_safe">ผู้ใหญ่ขึ้น ยั่วนิด ๆ แบบสุภาพ</option>
             </select>
           </div>
           <button className="primary bottom-action" onClick={finishSetup}>บันทึกและเริ่มคุย</button>
@@ -571,36 +631,36 @@ export default function Page() {
             onDoubleClick={onAvatarDoubleClick}
             style={{ touchAction: "none" }}
           >
-            <div className={`avatar-bob ${zoom.scale > 1.02 ? "paused" : ""}`}>
-              <img
-                src={currentChatImage}
-                alt={mem.nongnamName}
-                draggable={false}
-                style={{
-                  transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`,
-                  transformOrigin: "center center",
-                  transition: pinch.current.active || pinch.current.dragging ? "none" : "transform .25s ease",
-                }}
-                onError={(e) => {
-                  (e.currentTarget as HTMLImageElement).src = `/assets/avatars/${mem.gender}/default.jpg`;
-                }}
-              />
-            </div>
+            <img
+              src={currentChatImage}
+              alt={mem.nongnamName}
+              draggable={false}
+              style={{
+                transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`,
+                transformOrigin: "center center",
+                transition: pinch.current.active || pinch.current.dragging ? "none" : "transform .25s ease",
+              }}
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).src = `/assets/avatars/${mem.gender}/default.jpg`;
+              }}
+            />
           </div>
 
           {/* top floating row: bookshelf-left, name+gems-right */}
           <div className="chat-top-left">
             <button className="icon" onClick={() => setScreen("books")} title="ชั้นหนังสือ">📚</button>
+            <button className="icon" onClick={enableVoice} title="เปิดเสียง">🔊</button>
           </div>
           <div className="chat-top-right">
             <div className="pill">{mem.nongnamName}</div>
-            <div className="pill gems">💎 {mem.gems}</div>
+            <div className="pill gems">{mem.ownerMode ? "💎 ∞ OWNER" : `💎 ${mem.gems}`}</div>
           </div>
 
           {/* outfit button - right side mid */}
           <button className="floating-outfit" onClick={() => setScreen("outfits")} title="เปลี่ยนชุด">👗</button>
 
           <div className={`status ${status}`}>{statusText}</div>
+          {mem.ownerMode && <div className="owner-ribbon">OWNER TEST MODE</div>}
 
           {/* bubbles — only last 3, fade upward */}
           <div className="bubble-stack">
@@ -665,12 +725,15 @@ export default function Page() {
           <div className="outfit-grid">
             {visibleOutfits.map(o => (
               <div className="outfit-card" key={o.id}>
-                <img
-                  src={assets[`${o.id}_chat`] || o.chatImage}
-                  onError={(e) => {
-                    (e.currentTarget as HTMLImageElement).src = `/assets/avatars/${o.gender}/default.jpg`;
-                  }}
-                />
+                <div className={`outfit-img-wrap ${(!isUnlocked(o.id) || o.ageRestricted || o.lockedPreview) ? "locked-blur" : ""}`}>
+                  <img
+                    src={assets[`${o.id}_chat`] || o.chatImage}
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).src = `/assets/avatars/${o.gender}/default.jpg`;
+                    }}
+                  />
+                  {(!isUnlocked(o.id) || o.ageRestricted || o.lockedPreview) && <div className="locked-overlay">🔒<br/>ปลดล็อกเพื่อดูชัด</div>}
+                </div>
                 {o.ageRestricted && <div className="adult-badge">20+</div>}
                 <b>{o.title}</b>
                 <p>{o.desc}</p>
