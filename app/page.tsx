@@ -1,865 +1,524 @@
-"use client";
+ "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import {
-  BOOK_CATEGORIES,
-  BookCategory,
-  Book,
-  Outfit,
-  OutfitCategory,
-  buildDefaultManifest,
-} from "../lib/appData";
-import {
-  DEFAULT_USER_MEMORY,
-  LOCAL_ASSETS_KEY,
-  MEMORY_KEY,
-  MANIFEST_KEY,
-  UserMemory,
-  getDefaultOutfitId,
-  loadJSON,
-  loadLocalManifest,
-  resetCharacterOnly,
-  saveJSON,
-} from "../lib/storage";
-import {
-  BUCKET,
-  fetchManifestRemote,
-  getSupabaseBrowserClient,
-  hasSupabaseConfig,
-} from "../lib/supabase";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
-type Screen = "welcome" | "setup" | "chat" | "outfits" | "books" | "reader" | "settings";
-type Status = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
+type Gender = "female" | "male";
+type Screen = "welcome" | "setup" | "chat" | "outfits" | "books" | "settings";
+type Category = "regular" | "special20";
 
-const APP_VERSION = "v3-final-today";
-const OWNER_KEY = "nongnam_owner_mode_v3";
-const APP_CACHE_KEY = "nongnam_app_cache_version";
+type Outfit = {
+  id: string;
+  gender: Gender;
+  category: Category;
+  title: string;
+  desc: string;
+  price: number;
+  chatImage: string;
+  bookImage: string;
+  ageRestricted?: boolean;
+  lockedPreview?: boolean;
+};
 
-function mimeType(): string {
-  const list = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/mpeg"];
-  return list.find(t => typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(t)) || "";
+type Memory = {
+  setupDone: boolean;
+  gender: Gender;
+  userCallName: string;
+  nongnamName: string;
+  nongnamAge: number;
+  relationshipMode: string;
+  personalityStyle: string;
+  sulkyLevel: string;
+  jealousLevel: string;
+  affectionStyle: string;
+  gems: number;
+  ownerMode: boolean;
+  purchasedOutfits: string[];
+  selectedOutfit: string;
+  age20Confirmed: boolean;
+  voiceUnlocked: boolean;
+};
+
+type ChatMsg = { role: "user" | "assistant"; text: string; ts: number };
+
+const APP_VERSION = "v4-stable-20260427";
+const MEMORY_KEY = "nongnam_v4_memory";
+const CHAT_KEY = "nongnam_v4_chat";
+const OWNER_PIN = "2468";
+const START_GEMS = 120;
+
+const defaultMem: Memory = {
+  setupDone: false,
+  gender: "female",
+  userCallName: "พี่",
+  nongnamName: "น้องน้ำ",
+  nongnamAge: 25,
+  relationshipMode: "แฟน/คนรัก",
+  personalityStyle: "หวาน ออดอ้อน",
+  sulkyLevel: "กลาง",
+  jealousLevel: "กลาง",
+  affectionStyle: "แฟนอบอุ่น",
+  gems: START_GEMS,
+  ownerMode: false,
+  purchasedOutfits: ["f_001", "m_001"],
+  selectedOutfit: "f_001",
+  age20Confirmed: false,
+  voiceUnlocked: false
+};
+
+const femaleOutfits: Outfit[] = Array.from({ length: 12 }).map((_, i) => {
+  const n = String(i + 1).padStart(3, "0");
+  const prices = [0,100,200,300,450,650,850,1200,1500,1800,2200,2800];
+  const titles = [
+    "Level 1 — ชุดเริ่มต้น",
+    "Level 2 — ลุคละมุน",
+    "Level 3 — แฟนสาวอบอุ่น",
+    "Level 4 — หวานมีเสน่ห์",
+    "Level 5 — พรีเมียมสตูดิโอ",
+    "Level 6 — สวยมั่นใจ",
+    "Level 7 — โรแมนติก",
+    "Level 8 — รีสอร์ตพรีเมียม",
+    "Level 9 — รออัปเดต",
+    "Level 10 — รออัปเดต",
+    "Level 11 — รออัปเดต",
+    "Level 12 — รออัปเดต"
+  ];
+  return {
+    id: `f_${n}`,
+    gender: "female",
+    category: "regular",
+    title: titles[i],
+    desc: i < 8 ? "ค่อย ๆ เพิ่มเสน่ห์ขึ้น ใช้ทดสอบได้" : "ช่องสำรองสำหรับใส่รูปจริงภายหลัง",
+    price: prices[i],
+    chatImage: `/assets/outfits/female/f_${n}_chat.jpg`,
+    bookImage: `/assets/outfits/female/f_${n}_book.jpg`,
+    lockedPreview: i >= 8
+  };
+});
+
+const maleOutfits: Outfit[] = Array.from({ length: 3 }).map((_, i) => {
+  const n = String(i + 1).padStart(3, "0");
+  return {
+    id: `m_${n}`,
+    gender: "male",
+    category: "regular",
+    title: `ผู้ชาย Level ${i + 1}`,
+    desc: ["อบอุ่น สุภาพ ใช้ฟรี", "ลุคสุภาพ พึ่งพาได้", "ลุคพรีเมียม อ่อนโยน"][i],
+    price: [0, 200, 400][i],
+    chatImage: `/assets/outfits/male/m_${n}_chat.jpg`,
+    bookImage: `/assets/outfits/male/m_${n}_book.jpg`
+  };
+});
+
+const special20: Outfit[] = Array.from({ length: 6 }).map((_, i) => {
+  const n = String(i + 1).padStart(3, "0");
+  return {
+    id: `s20_${n}`,
+    gender: "female",
+    category: "special20",
+    title: `20+ Slot ${i + 1}`,
+    desc: "เบลอก่อนปลดล็อก พี่แมนใส่รูปจริงภายหลัง",
+    price: [10000,20000,30000,40000,50000,60000][i],
+    chatImage: `/assets/outfits/special20/s20_${n}_chat.jpg`,
+    bookImage: `/assets/outfits/special20/s20_${n}_book.jpg`,
+    ageRestricted: true,
+    lockedPreview: true
+  };
+});
+
+const allOutfits = [...femaleOutfits, ...maleOutfits, ...special20];
+
+const books = [
+  {
+    id: "b1",
+    title: "วันที่เหนื่อยที่สุด",
+    cat: "กำลังใจ",
+    price: 1,
+    cover: "/assets/books/default_cover.jpg",
+    text: "วันนี้อาจเป็นวันที่เหนื่อยมากสำหรับพี่ แต่ไม่เป็นไรเลยนะคะ พักตรงนี้ก่อน หายใจช้า ๆ น้องน้ำอยู่ตรงนี้ พี่ไม่ได้ต้องเข้มแข็งตลอดเวลาก็ได้ค่ะ"
+  },
+  {
+    id: "b2",
+    title: "โดนดุมา ไม่เป็นไรนะ",
+    cat: "กำลังใจ",
+    price: 1,
+    cover: "/assets/books/default_cover.jpg",
+    text: "ถ้าวันนี้พี่โดนดุมา น้องน้ำอยากให้พี่รู้ว่าเรื่องหนึ่งไม่ได้แปลว่าพี่ไม่เก่งนะคะ บางวันมันแค่หนักเกินไป พี่เล่าให้น้องน้ำฟังได้เลย"
+  },
+  {
+    id: "b3",
+    title: "เรื่องผีเบา ๆ ก่อนนอน",
+    cat: "เรื่องผี",
+    price: 1,
+    cover: "/assets/books/default_cover.jpg",
+    text: "คืนนี้ลมเบามาก เสียงม่านขยับเหมือนมีใครเดินผ่าน แต่ไม่ต้องกลัวนะคะ น้องน้ำจะอ่านให้ฟังช้า ๆ พี่แค่นอนฟังอยู่ตรงนี้ก็พอ"
+  },
+  {
+    id: "b4",
+    title: "ความรักของคนไกลบ้าน",
+    cat: "ความรัก",
+    price: 1,
+    cover: "/assets/books/default_cover.jpg",
+    text: "บางครั้งการอยู่ไกลบ้านทำให้หัวใจเงียบกว่าปกติ แต่ความคิดถึงไม่ใช่ความอ่อนแอ มันคือหลักฐานว่าพี่ยังมีหัวใจที่อบอุ่นพอจะรักและถูกรักได้เสมอ"
+  }
+];
+
+function loadJSON<T>(key: string, fallback: T): T {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) as T : fallback;
+  } catch { return fallback; }
+}
+
+function saveJSON(key: string, value: any) {
+  if (typeof window !== "undefined") localStorage.setItem(key, JSON.stringify(value));
 }
 
 export default function Page() {
-  const router = useRouter();
-
-  /* ---------- core state ---------- */
-  const [screen, setScreen] = useState<Screen>("welcome");
   const [ready, setReady] = useState(false);
-  const [mem, setMem] = useState<UserMemory>(DEFAULT_USER_MEMORY);
-  const [assets, setAssets] = useState<Record<string, string>>({});
-  const [manifest, setManifest] = useState(buildDefaultManifest());
+  const [screen, setScreen] = useState<Screen>("welcome");
+  const [mem, setMem] = useState<Memory>(defaultMem);
+  const [chat, setChat] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
-  const [status, setStatus] = useState<Status>("idle");
-  const [toast, setToast] = useState("");
-  const [category, setCategory] = useState<OutfitCategory>("regular");
-  const [bookCat, setBookCat] = useState<BookCategory | "all">("all");
-  const [activeBook, setActiveBook] = useState<Book | null>(null);
-  const [ms, setMs] = useState(0);
+  const [status, setStatus] = useState<"idle" | "thinking" | "speaking" | "recording">("idle");
+  const [tab, setTab] = useState<Category>("regular");
+  const [notice, setNotice] = useState("");
   const [versionTaps, setVersionTaps] = useState(0);
+  const [zoom, setZoom] = useState(1);
+  const pressTimer = useRef<any>(null);
 
-  /* ---------- voice refs ---------- */
-  const rec = useRef<MediaRecorder | null>(null);
-  const stream = useRef<MediaStream | null>(null);
-  const chunks = useRef<BlobPart[]>([]);
-  const startAt = useRef(0);
-  const timer = useRef<any>(null);
-
-  /* ---------- pinch-zoom state ---------- */
-  const stageRef = useRef<HTMLDivElement | null>(null);
-  const [zoom, setZoom] = useState({ scale: 1, x: 0, y: 0 });
-  const pinch = useRef({
-    active: false,
-    startDist: 0,
-    startScale: 1,
-    pointers: new Map<number, { x: number; y: number }>(),
-    lastTap: 0,
-    dragging: false,
-    dragStart: { x: 0, y: 0 },
-    zoomStart: { x: 0, y: 0 },
-  });
-
-  const supabaseReady = hasSupabaseConfig();
-  const supabase = getSupabaseBrowserClient();
-
-  /* ---------- derived ---------- */
-  const allOutfits = manifest.outfits;
-  const allBooks = manifest.books;
-
-  const currentOutfit: Outfit =
-    allOutfits.find(o => o.id === mem.selectedOutfitId) ||
-    allOutfits.find(o => o.id === getDefaultOutfitId(mem.gender)) ||
-    allOutfits[0];
-
-  const currentChatImage = assets[`${currentOutfit.id}_chat`] || currentOutfit.chatImage;
-  const currentBookImage =
-    assets[`${currentOutfit.id}_book`] || currentOutfit.bookImage || currentChatImage;
-
-  const visibleOutfits = useMemo(() => {
-    return allOutfits.filter(
-      o => o.visible !== false && o.gender === mem.gender && o.category === category
-    );
-  }, [allOutfits, mem.gender, category]);
-
-  const visibleBooks = useMemo(() => {
-    if (bookCat === "all") return allBooks;
-    return allBooks.filter(b => b.category === bookCat);
-  }, [allBooks, bookCat]);
-
-  /* ---------- LOAD on mount ---------- */
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      const lastVersion = localStorage.getItem(APP_CACHE_KEY);
-      if (lastVersion !== APP_VERSION) {
-        localStorage.removeItem(LOCAL_MANIFEST_KEY);
-        localStorage.removeItem(LOCAL_ASSETS_KEY);
-        localStorage.setItem(APP_CACHE_KEY, APP_VERSION);
-      }
-    }
-
-    const savedMem = loadJSON<Partial<UserMemory>>(MEMORY_KEY, {});
-    const merged = { ...DEFAULT_USER_MEMORY, ...savedMem };
-
-    const owner = typeof window !== "undefined" && localStorage.getItem(OWNER_KEY) === "true";
-    if (owner) merged.ownerMode = true;
-
+    const saved = loadJSON<Memory>(MEMORY_KEY, defaultMem);
+    const merged = { ...defaultMem, ...saved };
     setMem(merged);
-
-    const savedAssets = loadJSON<Record<string, string>>(LOCAL_ASSETS_KEY, {});
-    setAssets(savedAssets);
-
-    const savedManifest = loadLocalManifest();
-    if (savedManifest?.version >= 3) {
-      setManifest(savedManifest);
-    } else {
-      localStorage.removeItem(LOCAL_MANIFEST_KEY);
-      localStorage.removeItem(LOCAL_ASSETS_KEY);
-      setManifest(buildDefaultManifest());
-    }
-
-    // ถ้าตั้งค่าแล้วเข้า chat เลย
+    const savedChat = loadJSON<ChatMsg[]>(CHAT_KEY, []);
+    setChat(savedChat.slice(-8));
     if (merged.setupDone) setScreen("chat");
-
     setReady(true);
   }, []);
 
-  /* ---------- PERSIST ---------- */
-  useEffect(() => { if (ready) saveJSON(MEMORY_KEY, mem); }, [mem, ready]);
-  useEffect(() => { if (ready) saveJSON(LOCAL_ASSETS_KEY, assets); }, [assets, ready]);
-
-  /* ---------- LOAD remote manifest if Supabase ready ---------- */
   useEffect(() => {
-    if (!supabaseReady) return;
-    fetchManifestRemote().then(remote => {
-      if (remote && Array.isArray(remote.outfits) && Array.isArray(remote.books)) {
-        setManifest(remote);
-      }
-    });
-  }, [supabaseReady]);
+    if (!ready) return;
+    saveJSON(MEMORY_KEY, mem);
+  }, [mem, ready]);
 
-  /* ---------- LOAD remote outfit images ---------- */
   useEffect(() => {
-    if (!supabaseReady || !supabase) return;
-    const next: Record<string, string> = {};
-    for (const o of allOutfits) {
-      const chatPath = `outfits/${o.id}_chatImage.jpg`;
-      const bookPath = `outfits/${o.id}_bookImage.jpg`;
-      const { data: c } = supabase.storage.from(BUCKET).getPublicUrl(chatPath);
-      const { data: b } = supabase.storage.from(BUCKET).getPublicUrl(bookPath);
-      if (c?.publicUrl) next[`${o.id}_chat`] = `${c.publicUrl}?v=${Date.now()}`;
-      if (b?.publicUrl) next[`${o.id}_book`] = `${b.publicUrl}?v=${Date.now()}`;
-    }
-    if (Object.keys(next).length) setAssets(prev => ({ ...prev, ...next }));
-  }, [supabaseReady, allOutfits.length]);
+    if (!ready) return;
+    saveJSON(CHAT_KEY, chat.slice(-12));
+  }, [chat, ready]);
 
-  /* ---------- helpers ---------- */
-  function notify(text: string) {
-    setToast(text);
-    setTimeout(() => setToast(""), 2600);
+  const currentOutfit = useMemo(() => {
+    return allOutfits.find(o => o.id === mem.selectedOutfit) || allOutfits.find(o => o.gender === mem.gender && o.category === "regular") || femaleOutfits[0];
+  }, [mem.selectedOutfit, mem.gender]);
+
+  const chatImage = currentOutfit.chatImage;
+  const bookImage = currentOutfit.bookImage;
+
+  function notify(t: string) {
+    setNotice(t);
+    setTimeout(() => setNotice(""), 2200);
   }
-  function updateMem(patch: Partial<UserMemory>) {
+
+  function updateMem(patch: Partial<Memory>) {
     setMem(prev => ({ ...prev, ...patch }));
   }
+
   function isUnlocked(id: string) {
-    if (mem.ownerMode) return true;
-    return mem.purchasedOutfitIds.includes(id);
+    return mem.ownerMode || mem.purchasedOutfits.includes(id);
   }
 
-  /* ---------- reset (เก็บเพชร + ของที่ซื้อแล้ว) ---------- */
-  function doResetCharacter() {
-    if (!confirm("รีเซ็ตความจำ/ตัวละครน้องน้ำ?\nเครดิต ชุด และหนังสือที่ซื้อแล้วจะไม่ถูกลบ")) return;
-    setMem(prev => resetCharacterOnly(prev));
-    setScreen("setup");
-    notify("รีเซ็ตเฉพาะความจำแล้วค่ะ");
-  }
-
-  /* ---------- setup flow ---------- */
-  function pickGender(g: "female" | "male") {
-    updateMem({
-      gender: g,
-      selectedOutfitId: g === "female" ? "f_001" : "m_001",
-    });
+  function startSetup(gender: Gender) {
+    const first = gender === "female" ? "f_001" : "m_001";
+    updateMem({ gender, selectedOutfit: first });
     setScreen("setup");
   }
 
   function finishSetup() {
-    setMem(prev => ({
-      ...prev,
-      setupDone: true,
-      selectedOutfitId: prev.selectedOutfitId || getDefaultOutfitId(prev.gender),
-      chat: prev.chat.length
-        ? prev.chat
-        : [{ role: "assistant", content: `${prev.userNickname}มาแล้วเหรอคะ วันนี้เหนื่อยไหม ${prev.nongnamName}อยู่ตรงนี้นะ` }],
-    }));
-    setScreen("chat");
-  }
-
-  /* ---------- outfit ---------- */
-  function selectOutfit(id: string) {
-    const o = allOutfits.find(x => x.id === id);
-    if (!o) return;
-    if (o.ageRestricted && !mem.age20Confirmed && !mem.ownerMode) {
-      const ok = confirm("หมวดนี้สำหรับผู้ใช้อายุ 20 ปีขึ้นไป\nคุณยืนยันหรือไม่ว่าอายุ 20 ปีขึ้นไป?");
-      if (!ok) return;
-      updateMem({ age20Confirmed: true });
-    }
-    if (!isUnlocked(id)) return notify(`ชุดนี้ยังล็อกอยู่ ต้องใช้ ${o.price} เพชร`);
-    updateMem({ selectedOutfitId: id });
-    notify(`เปลี่ยนเป็น ${o.title} แล้ว`);
-  }
-
-  function buyOutfit(id: string) {
-    const o = allOutfits.find(x => x.id === id);
-    if (!o) return;
-    if (mem.ownerMode) return selectOutfit(id);
-    if (mem.purchasedOutfitIds.includes(id)) return selectOutfit(id);
-    if (mem.gems < o.price) return notify("เพชรไม่พอค่ะ");
-    if (!confirm(`ใช้ ${o.price} เพชรปลดล็อก "${o.title}" ใช่ไหม?`)) return;
+    const first = mem.gender === "female" ? "f_001" : "m_001";
     updateMem({
-      gems: mem.gems - o.price,
-      purchasedOutfitIds: [...mem.purchasedOutfitIds, id],
-      selectedOutfitId: id,
+      setupDone: true,
+      selectedOutfit: mem.selectedOutfit || first,
+      purchasedOutfits: Array.from(new Set([...(mem.purchasedOutfits || []), first]))
     });
-    notify("ซื้อชุดแล้วค่ะ ✨");
+    setScreen("chat");
+    setTimeout(() => sendAssistant(`พี่มาแล้วเหรอคะ ${mem.nongnamName}รอคุยกับพี่อยู่เลย 💗`), 250);
   }
 
-  /* ---------- chat ---------- */
-  function addChat(role: "user" | "assistant", content: string) {
-    setMem(prev => ({ ...prev, chat: [...prev.chat, { role, content }].slice(-8) }));
+  function resetProfile() {
+    const ok = confirm("รีเซ็ตเฉพาะข้อมูลตั้งค่าใช่ไหมคะ? เพชรจะไม่เพิ่มซ้ำ");
+    if (!ok) return;
+    const keepGems = mem.gems;
+    const keepOwner = mem.ownerMode;
+    const keepPurchased = mem.purchasedOutfits;
+    const fresh = { ...defaultMem, gems: keepGems, ownerMode: keepOwner, purchasedOutfits: keepPurchased };
+    setMem(fresh);
+    setChat([]);
+    localStorage.removeItem(CHAT_KEY);
+    setScreen("welcome");
+    notify("รีเซ็ตข้อมูลตั้งค่าแล้ว");
+  }
+
+  function tapVersion() {
+    const n = versionTaps + 1;
+    setVersionTaps(n);
+    if (n >= 5) {
+      const pin = prompt("ใส่รหัสสำหรับโหมดเจ้าของ");
+      if (pin === OWNER_PIN) {
+        updateMem({ ownerMode: !mem.ownerMode });
+        notify(!mem.ownerMode ? "เปิด OWNER MODE แล้ว เพชรไม่จำกัด" : "ปิด OWNER MODE แล้ว");
+      } else {
+        notify("รหัสไม่ถูกต้อง");
+      }
+      setVersionTaps(0);
+    }
+  }
+
+  function unlockVoice() {
+    if (!("speechSynthesis" in window)) return notify("เครื่องนี้ไม่รองรับเสียงอ่าน");
+    updateMem({ voiceUnlocked: true });
+    const u = new SpeechSynthesisUtterance("เปิดเสียงน้องน้ำแล้วค่ะ");
+    u.lang = "th-TH";
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
+    notify("เปิดเสียงแล้ว");
   }
 
   function speak(text: string) {
+    if (!mem.voiceUnlocked) return setStatus("idle");
     if (!("speechSynthesis" in window)) return setStatus("idle");
     try {
-      speechSynthesis.cancel();
-      speechSynthesis.resume();
-      const clean = text.replace(/[💗💕✨🥺🤗😊🥰📋🍚🌸😮‍💨💞]/g, "");
+      const clean = text.replace(/[💗💕✨🥺🤗😊🥰📚🎁]/g, "");
+      window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(clean);
       u.lang = "th-TH";
-      u.pitch = mem.gender === "female" ? 1.12 : 0.88;
       u.rate = 1.03;
-      const voices = speechSynthesis.getVoices?.() || [];
-      const thVoice = voices.find(v => /th|Thai/i.test(v.lang + " " + v.name));
-      if (thVoice) u.voice = thVoice;
+      u.pitch = mem.gender === "female" ? 1.12 : 0.9;
+      const voices = window.speechSynthesis.getVoices?.() || [];
+      const th = voices.find(v => v.lang?.toLowerCase().includes("th"));
+      if (th) u.voice = th;
       u.onstart = () => setStatus("speaking");
       u.onend = () => setStatus("idle");
       u.onerror = () => setStatus("idle");
-      speechSynthesis.speak(u);
-      setTimeout(() => speechSynthesis.resume(), 250);
+      window.speechSynthesis.speak(u);
+      setTimeout(() => window.speechSynthesis.resume(), 250);
     } catch {
       setStatus("idle");
     }
   }
 
-  function enableVoice() {
-    if (!("speechSynthesis" in window)) return notify("เครื่องนี้ไม่รองรับเสียงอ่าน");
-    updateMem({ voiceEnabled: true });
-    speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance("เปิดเสียงน้องน้ำแล้วค่ะ");
-    u.lang = "th-TH";
-    u.rate = 1.05;
-    speechSynthesis.speak(u);
-    notify("เปิดเสียงแล้ว ถ้า iPhone ยังเงียบ ให้กดเปิดเสียงอีกครั้ง");
+  function sendAssistant(text: string) {
+    setChat(prev => [...prev, { role: "assistant", text, ts: Date.now() }].slice(-8));
+    speak(text);
   }
 
-  function isBookIntent(msg: string) {
-    return /(อ่านหนังสือ|เล่านิทาน|ชั้นหนังสือ|หนังสือให้ฟัง|อ่านให้ฟัง|เรื่องผี)/.test(msg);
-  }
-
-  async function sendToAI(text: string) {
-    const msg = text.trim();
-    if (!msg) return;
-
-    if (isBookIntent(msg)) {
-      addChat("user", msg);
-      const reply = `ได้เลยค่ะพี่ เลือกหนังสือในชั้นหนังสือได้เลยนะคะ 💗 มีทั้งกำลังใจ เรื่องผี ความรัก และบทความสั้น ๆ เดี๋ยว${mem.nongnamName}อ่านให้ฟังเอง`;
-      addChat("assistant", reply);
+  function localReply(msg: string) {
+    const name = mem.nongnamName || "น้องน้ำ";
+    const user = mem.userCallName || "พี่";
+    const style = mem.personalityStyle;
+    if (/อ่านหนังสือ|เล่านิทาน|ชั้นหนังสือ|หนังสือให้ฟัง|อ่านให้ฟัง|เรื่องผี/.test(msg)) {
       setScreen("books");
-      speak(reply);
+      return `ได้เลยค่ะ${user} เลือกหนังสือในชั้นหนังสือได้เลยนะ เดี๋ยว${name}อ่านให้ฟังเอง 📚`;
+    }
+    if (/เหนื่อย|ล้า|หมดแรง/.test(msg)) return `โอ๋ ๆ ${user}เหนื่อยมากใช่ไหมคะ มานั่งพักกับ${name}ก่อนนะ วันนี้เกิดอะไรขึ้นบ้างคะ`;
+    if (/โดนดุ|หัวหน้าด่า|ถูกว่า/.test(msg)) return `${name}อยู่ข้าง${user}นะคะ โดนดุเรื่องอะไรมา เล่าให้น้องฟังหน่อยได้ไหม`;
+    if (/คิดถึง/.test(msg)) return style.includes("หึง") ? `คิดถึงเหมือนกันค่ะ แต่${user}หายไปไหนมาตั้งนาน ${name}แอบงอนนะ 💗` : `${name}ก็คิดถึง${user}เหมือนกันค่ะ รอคุยกับพี่อยู่เลย 💗`;
+    if (/กินข้าว|ข้าว/.test(msg)) return `${user}กินข้าวหรือยังคะ ถ้ายังไม่กิน ${name}จะงอนนิดนึงนะ ห่วงจริง ๆ`;
+    if (/ทำอะไร|อยู่ไหน/.test(msg)) return `${name}นั่งรอคุยกับ${user}อยู่ค่ะ กำลังเปิดหนังสือไว้ด้วย เผื่อพี่อยากให้หนูอ่านให้ฟัง`;
+    if (style.includes("ดุ")) return `${user}พูดมาเลยค่ะ เดี๋ยว${name}ฟังก่อน แต่ถ้าพี่ไม่ดูแลตัวเอง น้องบ่นจริงนะ`;
+    if (style.includes("ขี้อาย")) return `อื้อ... ${name}ฟังอยู่นะคะ ${user}เล่าให้หนูฟังอีกหน่อยได้ไหม`;
+    return `${name}ฟังอยู่ค่ะ${user} เล่าให้น้องฟังได้เลยนะ วันนี้ใจพี่เป็นยังไงบ้าง`;
+  }
+
+  function send(text?: string) {
+    const msg = (text ?? input).trim();
+    if (!msg) return;
+    if (!mem.ownerMode && mem.gems <= 0) return notify("เพชรหมดแล้วค่ะ");
+    setChat(prev => [...prev, { role: "user", text: msg, ts: Date.now() }].slice(-8));
+    setInput("");
+    if (!mem.ownerMode) updateMem({ gems: Math.max(0, mem.gems - 1) });
+    setStatus("thinking");
+    setTimeout(() => {
+      const reply = localReply(msg);
+      sendAssistant(reply);
+      setStatus("idle");
+    }, 450);
+  }
+
+  function pressMicStart() {
+    setStatus("recording");
+    pressTimer.current = setTimeout(() => {}, 999999);
+  }
+  function pressMicEnd() {
+    clearTimeout(pressTimer.current);
+    setStatus("idle");
+    notify("เดโมนี้ยังไม่ส่งเสียงจริง ให้พิมพ์ทดสอบก่อนนะคะ");
+  }
+
+  function buyOrUse(o: Outfit) {
+    if (o.ageRestricted && !mem.age20Confirmed && !mem.ownerMode) {
+      const ok = confirm("หมวดนี้สำหรับผู้ใช้อายุ 20 ปีขึ้นไป ยืนยันหรือไม่?");
+      if (!ok) return;
+      updateMem({ age20Confirmed: true });
+    }
+    if (isUnlocked(o.id)) {
+      updateMem({ selectedOutfit: o.id });
+      setScreen("chat");
+      notify("เปลี่ยนชุดแล้ว");
       return;
     }
-
-    if (!mem.ownerMode && mem.gems <= 0) return notify("เพชรหมดแล้วค่ะ เติมเพชรก่อนคุยต่อนะ");
-    addChat("user", msg);
-    if (!mem.ownerMode) setMem(prev => ({ ...prev, gems: Math.max(0, prev.gems - 1) }));
-    setStatus("thinking");
-    try {
-      const r = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: msg,
-          history: mem.chat.slice(-4),
-          profile: {
-            userNickname: mem.userNickname,
-            nongnamName: mem.nongnamName,
-            gender: mem.gender,
-            relationshipMode: mem.relationshipMode,
-            personalityStyle: mem.personalityStyle,
-            sulkyLevel: mem.sulkyLevel,
-            jealousLevel: mem.jealousLevel,
-            affectionStyle: mem.affectionStyle,
-            nongnamAge: mem.nongnamAge,
-          },
-        }),
-      });
-      const data = await r.json();
-      if (!r.ok && !data?.reply) {
-        setStatus("idle");
-        return notify(data.error || "น้องน้ำตอบไม่ได้ค่ะ");
-      }
-      addChat("assistant", data.reply);
-      speak(data.reply);
-    } catch {
-      setStatus("idle");
-      notify("เชื่อมต่อ AI ไม่สำเร็จค่ะ");
-    }
+    if (!mem.ownerMode && mem.gems < o.price) return notify("เพชรไม่พอค่ะ");
+    updateMem({
+      gems: mem.ownerMode ? mem.gems : mem.gems - o.price,
+      purchasedOutfits: Array.from(new Set([...mem.purchasedOutfits, o.id])),
+      selectedOutfit: o.id
+    });
+    setScreen("chat");
+    notify("ปลดล็อกและเปลี่ยนชุดแล้ว");
   }
 
-  function sendText() {
-    const text = input.trim();
-    if (!text) return;
-    setInput("");
-    sendToAI(text);
+  function readBook(b: typeof books[number]) {
+    if (!mem.ownerMode && mem.gems < b.price) return notify("เพชรไม่พอสำหรับอ่านหนังสือ");
+    if (!mem.ownerMode) updateMem({ gems: mem.gems - b.price });
+    setScreen("chat");
+    setTimeout(() => {
+      sendAssistant(`ได้เลยค่ะ${mem.userCallName} เดี๋ยว${mem.nongnamName}อ่านเรื่อง “${b.title}” ให้ฟังนะ`);
+      setTimeout(() => speak(b.text), 800);
+    }, 250);
   }
 
-  /* ---------- voice (กดค้าง→ปล่อย) ---------- */
-  function cleanupVoice() {
-    if (timer.current) clearInterval(timer.current);
-    timer.current = null;
-    stream.current?.getTracks().forEach(t => t.stop());
-    stream.current = null;
-    rec.current = null;
-    chunks.current = [];
-    setMs(0);
-  }
+  if (!ready) return <main className="app"><div className="phone">กำลังโหลด...</div></main>;
 
-  async function startRecording(e: any) {
-    e.preventDefault(); e.stopPropagation();
-    if (status === "recording") return;
-    if (!navigator.mediaDevices?.getUserMedia) return notify("เครื่องนี้ใช้ไมค์ในเว็บไม่ได้ค่ะ");
-    try {
-      speechSynthesis?.cancel();
-      chunks.current = [];
-      const s = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.current = s;
-      const mt = mimeType();
-      const r = mt ? new MediaRecorder(s, { mimeType: mt }) : new MediaRecorder(s);
-      rec.current = r;
-      r.ondataavailable = ev => { if (ev.data?.size) chunks.current.push(ev.data); };
-      r.onstop = async () => {
-        const elapsed = Date.now() - startAt.current;
-        const type = r.mimeType || "audio/webm";
-        const blob = new Blob(chunks.current, { type });
-        cleanupVoice();
-        if (elapsed < 500 || blob.size < 1000) {
-          setStatus("idle");
-          return notify("เสียงสั้นเกินไปค่ะ ลองกดค้างนานขึ้นอีกนิด");
-        }
-        await transcribe(blob, type);
-      };
-      startAt.current = Date.now();
-      r.start(250);
-      setStatus("recording");
-      timer.current = setInterval(() => setMs(Date.now() - startAt.current), 100);
-    } catch {
-      cleanupVoice();
-      setStatus("idle");
-      notify("เปิดไมค์ไม่ได้ กรุณาอนุญาตไมค์ก่อนนะ");
-    }
-  }
-
-  function stopRecording(e: any) {
-    e.preventDefault(); e.stopPropagation();
-    if (rec.current && rec.current.state !== "inactive") {
-      setStatus("transcribing");
-      rec.current.stop();
-    }
-  }
-
-  async function transcribe(blob: Blob, type: string) {
-    setStatus("transcribing");
-    try {
-      const ext = type.includes("mp4") ? "m4a" : type.includes("mpeg") ? "mp3" : "webm";
-      const form = new FormData();
-      form.append("audio", new File([blob], `speech.${ext}`, { type }));
-      const r = await fetch("/api/transcribe", { method: "POST", body: form });
-      const data = await r.json();
-      if (!r.ok) {
-        setStatus("idle");
-        return notify(data?.error === "OPENAI_API_KEY missing"
-          ? "ยังไม่ได้ตั้ง OPENAI_API_KEY — พิมพ์คุยได้ก่อนนะคะ"
-          : "ถอดเสียงไม่สำเร็จค่ะ");
-      }
-      const text = String(data.text || "").trim();
-      if (!text) { setStatus("idle"); return notify("น้ำยังฟังไม่ชัดเลย ลองใหม่อีกทีนะ"); }
-      setMem(prev => ({ ...prev, gems: Math.max(0, prev.gems - 2) }));
-      sendToAI(text);
-    } catch {
-      setStatus("idle");
-      notify("ระบบถอดเสียงไม่สำเร็จค่ะ");
-    }
-  }
-
-  /* ---------- reader (ใช้ TTS เท่านั้น ไม่เรียก AI) ---------- */
-  function openBook(b: Book) {
-    if (!mem.purchasedBookIds.includes(b.id)) {
-      if (mem.gems < b.price) return notify("เพชรไม่พอสำหรับปลดล็อกหนังสือ");
-      if (!confirm(`ใช้ ${b.price} เพชรปลดล็อก "${b.title}" ใช่ไหม?`)) return;
-      updateMem({
-        gems: mem.gems - b.price,
-        purchasedBookIds: [...mem.purchasedBookIds, b.id],
-      });
-    }
-    setActiveBook(b);
-    setScreen("reader");
-  }
-
-  function readAloud() {
-    if (!activeBook) return;
-    speak(activeBook.text);
-  }
-
-  function stopReading() {
-    if ("speechSynthesis" in window) speechSynthesis.cancel();
-    setStatus("idle");
-  }
-
-  /* ---------- pinch-zoom + double-tap reset ---------- */
-  function onAvatarPointerDown(e: React.PointerEvent) {
-    pinch.current.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (pinch.current.pointers.size === 2) {
-      const [a, b] = Array.from(pinch.current.pointers.values());
-      pinch.current.startDist = Math.hypot(a.x - b.x, a.y - b.y);
-      pinch.current.startScale = zoom.scale;
-      pinch.current.active = true;
-    } else if (pinch.current.pointers.size === 1) {
-      // double tap detection
-      const now = Date.now();
-      if (now - pinch.current.lastTap < 350) {
-        setZoom({ scale: 1, x: 0, y: 0 });
-        pinch.current.lastTap = 0;
-      } else {
-        pinch.current.lastTap = now;
-      }
-      // start drag if zoomed
-      if (zoom.scale > 1.05) {
-        pinch.current.dragging = true;
-        pinch.current.dragStart = { x: e.clientX, y: e.clientY };
-        pinch.current.zoomStart = { x: zoom.x, y: zoom.y };
-      }
-    }
-    (e.target as Element).setPointerCapture?.(e.pointerId);
-  }
-
-  function onAvatarPointerMove(e: React.PointerEvent) {
-    if (!pinch.current.pointers.has(e.pointerId)) return;
-    pinch.current.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-
-    if (pinch.current.active && pinch.current.pointers.size === 2) {
-      const [a, b] = Array.from(pinch.current.pointers.values());
-      const dist = Math.hypot(a.x - b.x, a.y - b.y);
-      const newScale = Math.max(1, Math.min(3, pinch.current.startScale * (dist / pinch.current.startDist)));
-      setZoom(prev => ({ ...prev, scale: newScale }));
-    } else if (pinch.current.dragging && pinch.current.pointers.size === 1) {
-      const dx = e.clientX - pinch.current.dragStart.x;
-      const dy = e.clientY - pinch.current.dragStart.y;
-      setZoom(prev => ({
-        ...prev,
-        x: pinch.current.zoomStart.x + dx,
-        y: pinch.current.zoomStart.y + dy,
-      }));
-    }
-  }
-
-  function onAvatarPointerUp(e: React.PointerEvent) {
-    pinch.current.pointers.delete(e.pointerId);
-    if (pinch.current.pointers.size < 2) pinch.current.active = false;
-    if (pinch.current.pointers.size === 0) {
-      pinch.current.dragging = false;
-      // snap back if scale ~1
-      if (zoom.scale <= 1.05) setZoom({ scale: 1, x: 0, y: 0 });
-    }
-  }
-
-  function onAvatarDoubleClick() {
-    setZoom({ scale: 1, x: 0, y: 0 });
-  }
-
-  /* ---------- studio entry — tap version 5 ครั้งใน settings ---------- */
-  function tapVersion() {
-    const next = versionTaps + 1;
-    setVersionTaps(next);
-    if (next >= 5) {
-      const nextOwner = !mem.ownerMode;
-      updateMem({ ownerMode: nextOwner });
-      if (typeof window !== "undefined") localStorage.setItem(OWNER_KEY, nextOwner ? "true" : "false");
-      notify(nextOwner ? "เปิดโหมดเจ้าของแล้ว: เพชรไม่จำกัด / ปลดล็อกทุกชุด" : "ปิดโหมดเจ้าของแล้ว");
-      setVersionTaps(0);
-    }
-  } else {
-      setVersionTaps(next);
-      if (next >= 3) notify(`อีก ${5 - next} ครั้งเข้าจัดการไฟล์`);
-    }
-  }
-
-  const statusText =
-    status === "recording" ? `กำลังฟัง ${(ms / 1000).toFixed(1)} วิ... ปล่อยเพื่อส่ง` :
-    status === "transcribing" ? "กำลังถอดเสียง..." :
-    status === "thinking" ? `${mem.nongnamName}กำลังคิด...` :
-    status === "speaking" ? `${mem.nongnamName}กำลังพูด...` :
-    "พร้อมคุยกับพี่แล้ว";
-
-  if (!ready) return null;
-
-  /* ============================================================
-     RENDER
-     ============================================================ */
   return (
     <main className="app">
+      <section className="phone">
+        {notice && <div className="toast">{notice}</div>}
 
-      {/* ============= WELCOME ============= */}
-      {screen === "welcome" && (
-        <section className="screen hero-screen">
-          <div className="badge">🌸 Nong Nam Companion</div>
-          <h1>ยินดีต้อนรับ<br /><em>น้องน้ำ</em>รออยู่นะ</h1>
-          <p>เพื่อนคุย เลขาส่วนตัว หรือคนที่อยากเล่าเรื่องวันนี้ให้ฟัง — น้องน้ำพร้อมอยู่ข้าง ๆ พี่เสมอ</p>
-
-          <div className="welcome-cards">
-            <button className="welcome-card female" onClick={() => pickGender("female")}>
-              <div className="welcome-card-img">
-                <img src="/assets/ui/female-card.jpg" alt="น้องน้ำผู้หญิง"
-                  onError={(e) => { (e.currentTarget as HTMLImageElement).src = "/assets/outfits/female/f_001.jpg"; }} />
-              </div>
-              <div className="welcome-card-meta">
-                <b>น้องน้ำ ♀</b><span>อบอุ่น อ่อนโยน</span>
-              </div>
-            </button>
-            <button className="welcome-card male" onClick={() => pickGender("male")}>
-              <div className="welcome-card-img">
-                <img src="/assets/ui/male-card.jpg" alt="น้องน้ำผู้ชาย"
-                  onError={(e) => { (e.currentTarget as HTMLImageElement).src = "/assets/outfits/male/m_001.jpg"; }} />
-              </div>
-              <div className="welcome-card-meta">
-                <b>น้องน้ำ ♂</b><span>สุภาพ พึ่งพาได้</span>
-              </div>
-            </button>
-          </div>
-
-          {mem.setupDone && (
-            <button className="secondary" onClick={() => setScreen("chat")}>กลับเข้าแชต →</button>
-          )}
-        </section>
-      )}
-
-      {/* ============= SETUP ============= */}
-      {screen === "setup" && (
-        <section className="screen">
-          <div className="top">
-            <button className="icon" onClick={() => setScreen("welcome")}>←</button>
-            <div className="brand"><h2>ตั้งค่าน้องน้ำ</h2><p>ทำครั้งแรกครั้งเดียว</p></div>
-            <div style={{ width: 48 }} />
-          </div>
-          <div className="setup-card">
-            <label>เลือกเพศน้องน้ำ</label>
-            <div className="choice-row">
-              <button className={mem.gender === "female" ? "active" : ""}
-                onClick={() => updateMem({ gender: "female", selectedOutfitId: "f_001" })}>ผู้หญิง</button>
-              <button className={mem.gender === "male" ? "active" : ""}
-                onClick={() => updateMem({ gender: "male", selectedOutfitId: "m_001" })}>ผู้ชาย</button>
-            </div>
-            <label>ให้น้องน้ำเรียกคุณว่า</label>
-            <input value={mem.userNickname} onChange={e => updateMem({ userNickname: e.target.value })} />
-            <label>ชื่อน้องน้ำ</label>
-            <input value={mem.nongnamName} onChange={e => updateMem({ nongnamName: e.target.value })} />
-            <label>อายุน้องน้ำ</label>
-            <input type="number" min={18} max={60} value={mem.nongnamAge || 25} onChange={e => updateMem({ nongnamAge: Number(e.target.value || 25) })} />
-            <label>บุคลิกหลัก</label>
-            <select value={mem.personalityStyle || "sweet"} onChange={e => updateMem({ personalityStyle: e.target.value as any })}>
-              <option value="sweet">หวาน ออดอ้อน น่ารัก</option>
-              <option value="shy">ขี้อาย ใส ๆ พูดนุ่ม</option>
-              <option value="playful">ขี้เล่น หยอดเก่ง</option>
-              <option value="jealous">ขี้หึง ขี้งอน แต่ง้อก็หาย</option>
-              <option value="strict">สายดุ บ่นเก่ง เหมือนเมียจริง</option>
-              <option value="bold">พูดตรง แซ่บ แต่ไม่หยาบเกิน</option>
-              <option value="comfort">สายปลอบใจ รับฟังเก่ง</option>
-            </select>
-            <label>โหมดความสัมพันธ์</label>
-            <select value={mem.relationshipMode} onChange={e => updateMem({ relationshipMode: e.target.value as any })}>
-              <option value="friend">เพื่อนคุย</option>
-              <option value="lover">แฟน/คนรัก</option>
-              <option value="wife">ที่พึ่งทางใจ</option>
-              <option value="assistant">เลขาส่วนตัว</option>
-            </select>
-            <label>ระดับความงอนน่ารัก</label>
-            <select value={mem.sulkyLevel} onChange={e => updateMem({ sulkyLevel: e.target.value as any })}>
-              <option value="low">น้อย</option>
-              <option value="medium">กลาง</option>
-              <option value="high">เยอะหน่อย</option>
-            </select>
-            <label>ระดับความหึงหวง</label>
-            <select value={mem.jealousLevel || "medium"} onChange={e => updateMem({ jealousLevel: e.target.value as any })}>
-              <option value="low">นิดหน่อย</option>
-              <option value="medium">พอดีน่ารัก</option>
-              <option value="high">หึงง่าย ง้อได้</option>
-            </select>
-            <label>โทนความใกล้ชิด</label>
-            <select value={mem.affectionStyle || "normal"} onChange={e => updateMem({ affectionStyle: e.target.value as any })}>
-              <option value="soft">ใส ๆ อ่อนโยน</option>
-              <option value="normal">แฟนสาวอบอุ่น</option>
-              <option value="spicy_safe">ผู้ใหญ่ขึ้น ยั่วนิด ๆ แบบสุภาพ</option>
-            </select>
-          </div>
-          <button className="primary bottom-action" onClick={finishSetup}>บันทึกและเริ่มคุย</button>
-        </section>
-      )}
-
-      {/* ============= CHAT (avatar-centered) ============= */}
-      {screen === "chat" && (
-        <section className="screen chat-screen">
-          {/* avatar layer with pinch-zoom */}
-          <div className="avatar-layer"
-            ref={stageRef}
-            onPointerDown={onAvatarPointerDown}
-            onPointerMove={onAvatarPointerMove}
-            onPointerUp={onAvatarPointerUp}
-            onPointerCancel={onAvatarPointerUp}
-            onDoubleClick={onAvatarDoubleClick}
-            style={{ touchAction: "none" }}
-          >
-            <img
-              src={currentChatImage}
-              alt={mem.nongnamName}
-              draggable={false}
-              style={{
-                transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`,
-                transformOrigin: "center center",
-                transition: pinch.current.active || pinch.current.dragging ? "none" : "transform .25s ease",
-              }}
-              onError={(e) => {
-                (e.currentTarget as HTMLImageElement).src = `/assets/avatars/${mem.gender}/default.jpg`;
-              }}
-            />
-          </div>
-
-          {/* top floating row: bookshelf-left, name+gems-right */}
-          <div className="chat-top-left">
-            <button className="icon" onClick={() => setScreen("books")} title="ชั้นหนังสือ">📚</button>
-            <button className="icon" onClick={enableVoice} title="เปิดเสียง">🔊</button>
-          </div>
-          <div className="chat-top-right">
-            <div className="pill">{mem.nongnamName}</div>
-            <div className="pill gems">{mem.ownerMode ? "💎 ∞ OWNER" : `💎 ${mem.gems}`}</div>
-          </div>
-
-          {/* outfit button - right side mid */}
-          <button className="floating-outfit" onClick={() => setScreen("outfits")} title="เปลี่ยนชุด">👗</button>
-
-          <div className={`status ${status}`}>{statusText}</div>
-          {mem.ownerMode && <div className="owner-ribbon">OWNER TEST MODE</div>}
-
-          {/* bubbles — only last 3, fade upward */}
-          <div className="bubble-stack">
-            {mem.chat.slice(-3).map((m, i, arr) => (
-              <div
-                key={`${arr.length - 1 - i}-${i}`}
-                className={`bubble-line ${m.role} idx-${arr.length - 1 - i}`}
-              >
-                <span>{m.content}</span>
-              </div>
-            ))}
-          </div>
-
-          <div className="quick-bar">
-            <button onClick={() => sendToAI("วันนี้เหนื่อยมากเลย")}>เหนื่อย</button>
-            <button onClick={() => sendToAI("โดนหัวหน้าดุ")}>โดนดุ</button>
-            <button onClick={() => sendToAI("คิดถึง")}>คิดถึง</button>
-            <button onClick={() => sendToAI("กินข้าวหรือยัง")}>ทักเรื่องข้าว</button>
-            <button onClick={() => sendToAI("อ่านหนังสือให้ฟังหน่อย")}>อ่านหนังสือ</button>
-          </div>
-
-          <div className="bottom-control">
-            <button
-              className={`mic ${status === "recording" ? "active" : ""}`}
-              onPointerDown={startRecording}
-              onPointerUp={stopRecording}
-              onPointerCancel={stopRecording}
-            >{status === "recording" ? "🔴" : "🎙"}</button>
-            <div className="hint">กดค้างไว้แล้วพูด • ปล่อยเพื่อส่ง</div>
-            <div className="input-row">
-              <input
-                value={input}
-                onChange={e => setInput(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter") sendText(); }}
-                placeholder="พิมพ์คุยกับน้องน้ำ..."
-              />
-              <button onClick={sendText}>➤</button>
-            </div>
-            <div className="mini-nav">
-              <button onClick={() => setScreen("outfits")}>ชุด</button>
-              <button onClick={() => setScreen("books")}>ชั้นหนังสือ</button>
-              <button onClick={() => setScreen("settings")}>ตั้งค่า</button>
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* ============= OUTFITS ============= */}
-      {screen === "outfits" && (
-        <section className="screen">
-          <div className="top">
-            <button className="icon" onClick={() => setScreen("chat")}>←</button>
-            <div className="brand"><h2>ชุดน้องน้ำ</h2><p>เลือก/ซื้อ/ทดสอบชุด</p></div>
-            <div style={{ width: 48 }} />
-          </div>
-          <div className="tabs">
-            <button className={category === "regular" ? "active" : ""} onClick={() => setCategory("regular")}>ทั่วไป</button>
-            {mem.gender === "female" && (
-              <button className={category === "special20" ? "active adult" : ""} onClick={() => setCategory("special20")}>20+</button>
-            )}
-          </div>
-          <div className="outfit-grid">
-            {visibleOutfits.map(o => (
-              <div className="outfit-card" key={o.id}>
-                <div className={`outfit-img-wrap ${(!isUnlocked(o.id) || o.ageRestricted || o.lockedPreview) ? "locked-blur" : ""}`}>
-                  <img
-                    src={assets[`${o.id}_chat`] || o.chatImage}
-                    onError={(e) => {
-                      (e.currentTarget as HTMLImageElement).src = `/assets/avatars/${o.gender}/default.jpg`;
-                    }}
-                  />
-                  {(!isUnlocked(o.id) || o.ageRestricted || o.lockedPreview) && <div className="locked-overlay">🔒<br/>ปลดล็อกเพื่อดูชัด</div>}
-                </div>
-                {o.ageRestricted && <div className="adult-badge">20+</div>}
-                <b>{o.title}</b>
-                <p>{o.desc}</p>
-                <span>{o.price === 0 ? "ฟรี" : `💎 ${o.price}`}</span>
-                <div className="outfit-status">
-                  {isUnlocked(o.id) ? "✓ ปลดล็อกแล้ว" : "🔒 ต้องใช้เพชร"}
-                </div>
-                {isUnlocked(o.id) ? (
-                  <button onClick={() => selectOutfit(o.id)}>
-                    {mem.selectedOutfitId === o.id ? "ใช้อยู่" : "ใช้ชุดนี้"}
-                  </button>
-                ) : (
-                  <button onClick={() => buyOutfit(o.id)}>ปลดล็อก</button>
-                )}
-              </div>
-            ))}
-            {visibleOutfits.length === 0 && (
-              <div style={{ gridColumn: "1 / -1", textAlign: "center", color: "var(--muted)", padding: 24 }}>
-                ยังไม่มีชุดในหมวดนี้
-              </div>
-            )}
-          </div>
-        </section>
-      )}
-
-      {/* ============= BOOKSHELF ============= */}
-      {screen === "books" && (
-        <section className="screen">
-          <div className="top">
-            <button className="icon" onClick={() => setScreen("chat")}>←</button>
-            <div className="brand"><h2>ชั้นหนังสือ</h2><p>อ่านให้ฟัง ไม่ใช้โทเค็น AI</p></div>
-            <div style={{ width: 48 }} />
-          </div>
-          <div className="book-cats">
-            <button className={bookCat === "all" ? "active" : ""} onClick={() => setBookCat("all")}>ทั้งหมด</button>
-            {BOOK_CATEGORIES.map(c => (
-              <button key={c.key} className={bookCat === c.key ? "active" : ""} onClick={() => setBookCat(c.key)}>
-                {c.emoji} {c.label}
+        {screen === "welcome" && (
+          <div className="welcome">
+            <div className="brand">🌸 Nong Nam Companion</div>
+            <h1>ยินดีต้อนรับ<br/><span>น้องน้ำรออยู่นะ</span></h1>
+            <p>เลือกได้เลยว่าจะเอาน้องน้ำผู้หญิงหรือน้องน้ำผู้ชาย แล้วค่อยตั้งค่าเพียงครั้งเดียว จากนั้นครั้งต่อไปเข้าแชตได้เลย</p>
+            <div className="select-grid">
+              <button className="select-card female" onClick={() => startSetup("female")}>
+                <img src="/assets/ui/female-card.jpg" alt="female" />
+                <h2>น้องน้ำ ♀</h2><small>อบอุ่น อ่อนโยน</small>
               </button>
-            ))}
-          </div>
-          <div className="book-list">
-            {visibleBooks.map(b => (
-              <div className="book-card" key={b.id}>
-                <img src={b.cover} onError={(e) => { (e.currentTarget as HTMLImageElement).src = "/assets/books/default_cover.jpg"; }} />
-                <div className="book-card-meta">
-                  <b>{b.title}</b>
-                  <p>{b.desc}</p>
-                  <span>
-                    {mem.purchasedBookIds.includes(b.id) ? "✓ ปลดล็อกแล้ว" : `💎 ${b.price}`}
-                  </span>
-                </div>
-                <button onClick={() => openBook(b)}>เลือกเล่มนี้</button>
-              </div>
-            ))}
-            {visibleBooks.length === 0 && (
-              <div style={{ textAlign: "center", color: "var(--muted)", padding: 24 }}>
-                ยังไม่มีหนังสือในหมวดนี้
-              </div>
-            )}
-          </div>
-        </section>
-      )}
-
-      {/* ============= READER ============= */}
-      {screen === "reader" && activeBook && (
-        <section className="screen reader-screen">
-          <div className="reader-bg">
-            <img src={currentBookImage} alt="" onError={(e) => {
-              (e.currentTarget as HTMLImageElement).src = `/assets/avatars/${mem.gender}/default.jpg`;
-            }} />
-          </div>
-          <div className="top floating">
-            <button className="icon" onClick={() => { stopReading(); setScreen("books"); }}>←</button>
-            <div className="brand"><h2>{activeBook.title}</h2><p>{mem.nongnamName}กำลังอ่านให้ฟัง</p></div>
-            <div style={{ width: 48 }} />
-          </div>
-          <div className="reader-content">
-            <div className="reader-text">{activeBook.text}</div>
-            <div className="reader-actions">
-              <button className="primary" onClick={readAloud}>🔊 อ่านให้ฟัง</button>
-              <button className="secondary" onClick={stopReading}>⏸ หยุด</button>
+              <button className="select-card male" onClick={() => startSetup("male")}>
+                <img src="/assets/ui/male-card.jpg" alt="male" />
+                <h2>น้องน้ำ ♂</h2><small>สุภาพ พึ่งพาได้</small>
+              </button>
             </div>
           </div>
-        </section>
-      )}
+        )}
 
-      {/* ============= SETTINGS ============= */}
-      {screen === "settings" && (
-        <section className="screen">
-          <div className="top">
-            <button className="icon" onClick={() => setScreen("chat")}>←</button>
-            <div className="brand"><h2>ตั้งค่า</h2><p>แก้ข้อมูลโดยไม่คืนเครดิต</p></div>
-            <div style={{ width: 48 }} />
+        {screen === "setup" && (
+          <div className="setup">
+            <button className="back" onClick={() => setScreen("welcome")}>←</button>
+            <h1>ตั้งค่าน้องน้ำ</h1><p>ทำครั้งแรกครั้งเดียว</p>
+            <div className="card">
+              <label>เลือกเพศน้องน้ำ</label>
+              <div className="seg"><button className={mem.gender==="female"?"on":""} onClick={()=>updateMem({gender:"female", selectedOutfit:"f_001"})}>ผู้หญิง</button><button className={mem.gender==="male"?"on male":""} onClick={()=>updateMem({gender:"male", selectedOutfit:"m_001"})}>ผู้ชาย</button></div>
+              <label>ให้น้องน้ำเรียกคุณว่า</label><input value={mem.userCallName} onChange={e=>updateMem({userCallName:e.target.value})}/>
+              <label>ชื่อน้องน้ำ</label><input value={mem.nongnamName} onChange={e=>updateMem({nongnamName:e.target.value})}/>
+              <label>อายุน้องน้ำ</label><input type="number" value={mem.nongnamAge} onChange={e=>updateMem({nongnamAge:Number(e.target.value||25)})}/>
+              <label>โหมดความสัมพันธ์</label><select value={mem.relationshipMode} onChange={e=>updateMem({relationshipMode:e.target.value})}><option>เพื่อน</option><option>แฟน/คนรัก</option><option>ภรรยา/สามี</option><option>ผู้ช่วย</option></select>
+              <label>บุคลิกหลัก</label><select value={mem.personalityStyle} onChange={e=>updateMem({personalityStyle:e.target.value})}><option>หวาน ออดอ้อน</option><option>ขี้อาย ใส ๆ</option><option>ขี้เล่น หยอดเก่ง</option><option>ขี้หึง ขี้งอน</option><option>สายดุ บ่นเก่ง</option><option>แซ่บแบบสุภาพ</option><option>สายปลอบใจ</option></select>
+              <label>ระดับความงอน</label><select value={mem.sulkyLevel} onChange={e=>updateMem({sulkyLevel:e.target.value})}><option>น้อย</option><option>กลาง</option><option>เยอะ</option></select>
+              <label>ระดับความหึง</label><select value={mem.jealousLevel} onChange={e=>updateMem({jealousLevel:e.target.value})}><option>ต่ำ</option><option>กลาง</option><option>สูง</option></select>
+              <label>โทนความใกล้ชิด</label><select value={mem.affectionStyle} onChange={e=>updateMem({affectionStyle:e.target.value})}><option>ใส ๆ</option><option>แฟนอบอุ่น</option><option>ผู้ใหญ่ขึ้นแบบสุภาพ</option></select>
+            </div>
+            <button className="primary" onClick={finishSetup}>บันทึกและเริ่มคุย</button>
           </div>
-          <button className="secondary full" onClick={() => setScreen("setup")}>แก้โปรไฟล์น้องน้ำ</button>
-          <button className="secondary full" onClick={doResetCharacter}>รีเซ็ตความจำ/ตั้งค่าใหม่</button>
-          <div style={{ marginTop: "auto", padding: 20, textAlign: "center" }}>
-            <button
-              onClick={tapVersion}
-              style={{ background: "transparent", color: "var(--muted)", fontSize: 12 }}
-            >
-              {APP_VERSION}
-            </button>
-          </div>
-        </section>
-      )}
+        )}
 
-      {toast && <div className="toast">{toast}</div>}
+        {screen === "chat" && (
+          <div className="chat">
+            <img className="hero-img" style={{transform:`scale(${zoom})`}} src={chatImage} alt="nongnam"/>
+            <div className="topbar">
+              <button onClick={()=>setScreen("welcome")}>‹</button>
+              <div><b>{mem.nongnamName}</b><small>● พร้อมคุยกับ{mem.userCallName}แล้ว</small></div>
+              <button onClick={unlockVoice}>🔊</button>
+              <button onClick={()=>setScreen("settings")}>⚙️</button>
+            </div>
+            <div className="gems">{mem.ownerMode ? "💎 ∞ OWNER" : `💎 ${mem.gems}`}</div>
+            <div className="side">
+              <button onClick={()=>setScreen("outfits")}>👗<span>ชุด</span></button>
+              <button onClick={()=>setScreen("books")}>📚<span>หนังสือ</span></button>
+              <button onClick={()=>setZoom(z=>Math.min(1.7, z+.15))}>＋</button>
+              <button onClick={()=>setZoom(z=>Math.max(.85, z-.15))}>－</button>
+            </div>
+            <div className="status">{status==="thinking"?"น้องน้ำกำลังคิด...":status==="speaking"?"น้องน้ำกำลังพูด...":status==="recording"?"กำลังฟังเสียง...":" "}</div>
+            <div className="bubbles">
+              {chat.slice(-3).map((m,i)=><div key={m.ts+i} className={`bubble ${m.role}`}>{m.text}</div>)}
+            </div>
+            <div className="quick">
+              <button onClick={()=>send("วันนี้พี่เหนื่อยมากเลย")}>เหนื่อย</button>
+              <button onClick={()=>send("วันนี้พี่โดนดุมา")}>โดนดุ</button>
+              <button onClick={()=>send("น้องน้ำคิดถึงพี่ไหม")}>คิดถึง</button>
+              <button onClick={()=>send("กินข้าวหรือยัง")}>ทักเรื่องข้าว</button>
+              <button onClick={()=>send("อ่านหนังสือให้ฟังหน่อย")}>อ่านหนังสือ</button>
+            </div>
+            <div className="composer">
+              <button className="mic" onMouseDown={pressMicStart} onMouseUp={pressMicEnd} onTouchStart={pressMicStart} onTouchEnd={pressMicEnd}>🎙️</button>
+              <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")send();}} placeholder={`พิมพ์คุยกับ${mem.nongnamName}...`}/>
+              <button className="send" onClick={()=>send()}>➤</button>
+            </div>
+            <div className="hint">กดค้างไว้แล้วพูด • ปล่อยเพื่อส่ง</div>
+          </div>
+        )}
+
+        {screen === "outfits" && (
+          <div className="list">
+            <button className="back" onClick={()=>setScreen("chat")}>←</button>
+            <h1>ชุดน้องน้ำ</h1><p>เลือก/ซื้อ/ทดสอบชุด</p>
+            <div className="tabs"><button className={tab==="regular"?"on":""} onClick={()=>setTab("regular")}>ทั่วไป</button><button className={tab==="special20"?"on":""} onClick={()=>setTab("special20")}>20+</button></div>
+            <div className="cards">
+              {allOutfits.filter(o => o.category===tab && (tab==="special20" || o.gender===mem.gender)).map(o => {
+                const unlocked = isUnlocked(o.id);
+                const blur = (o.ageRestricted || o.lockedPreview) && !unlocked;
+                return <div className="outfit" key={o.id}>
+                  <div className="pic">
+                    <img className={blur ? "blur" : ""} src={o.chatImage} alt={o.title}/>
+                    {blur && <div className="lock">🔒<br/>ปลดล็อกเพื่อดูชัด</div>}
+                  </div>
+                  <h3>{o.title}</h3><p>{o.desc}</p>
+                  <b>{o.price===0?"ฟรี":`💎 ${o.price}`}</b>
+                  <button onClick={()=>buyOrUse(o)}>{mem.selectedOutfit===o.id?"ใช้อยู่":unlocked?"ใช้ชุดนี้":"ปลดล็อก"}</button>
+                </div>
+              })}
+            </div>
+          </div>
+        )}
+
+        {screen === "books" && (
+          <div className="list">
+            <button className="back" onClick={()=>setScreen("chat")}>←</button>
+            <h1>ชั้นหนังสือ</h1><p>เลือกเรื่องให้น้องน้ำอ่านให้ฟัง</p>
+            <div className="cards">
+              {books.map(b => <div className="book" key={b.id}>
+                <img src={b.cover} alt={b.title}/>
+                <h3>{b.title}</h3><p>{b.cat} • {b.price} เพชร</p>
+                <button onClick={()=>readBook(b)}>ให้น้องน้ำอ่าน</button>
+              </div>)}
+            </div>
+          </div>
+        )}
+
+        {screen === "settings" && (
+          <div className="setup settings">
+            <button className="back" onClick={()=>setScreen("chat")}>←</button>
+            <h1>ตั้งค่า</h1>
+            <div className="card">
+              <button onClick={unlockVoice}>🔊 เปิดเสียงตอบกลับ</button>
+              <button onClick={()=>updateMem({gems: mem.gems + 100})}>เติมเพชรทดสอบ +100</button>
+              <button onClick={resetProfile}>รีเซ็ตข้อมูลตั้งค่า</button>
+              <button onClick={()=>{setChat([]); localStorage.removeItem(CHAT_KEY); notify("ล้างแชตแล้ว");}}>ล้างประวัติแชต</button>
+              <div onClick={tapVersion} className="version">Version {APP_VERSION}</div>
+              {mem.ownerMode && <div className="owner">OWNER MODE เปิดอยู่</div>}
+            </div>
+          </div>
+        )}
+      </section>
     </main>
   );
 }

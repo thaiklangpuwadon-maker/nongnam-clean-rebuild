@@ -1,10 +1,14 @@
-import "./globals.css";
+import './globals.css';
 
 export const metadata = {
-  title: "Nong Nam AI Companion",
-  description: "Clean rebuild with admin and bookshelf"
+  title: 'Nong Nam AI Companion',
+  description: 'Thai AI companion MVP'
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return <html lang="th"><body>{children}</body></html>;
+  return (
+    <html lang="th">
+      <body>{children}</body>
+    </html>
+  );
 }
