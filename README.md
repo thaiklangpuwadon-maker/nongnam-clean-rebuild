@@ -1,4 +1,4 @@
-# Nong Nam Companion — v2
+# Nong Nam Companion — v3.1 Final Root Upload
 
 เวอร์ชันแก้จาก clean rebuild v1 ตามสเปค 16 ข้อ
 
@@ -199,3 +199,8 @@ public/assets/outfits/female/f_006_book.jpg
 iPhone/Safari อาจบล็อกเสียงอัตโนมัติหลัง async API call
 ให้กดปุ่ม 🔊 เปิดเสียงก่อน 1 ครั้งในหน้าแชต
 โหมดอ่านหนังสือมักมีเสียง เพราะเกิดจากปุ่มกดโดยตรง
+
+
+## v3.1 hotfix
+- ล้าง local manifest/assets เก่าทันทีเมื่อเวอร์ชันเปลี่ยน เพื่อไม่ให้รูปการ์ตูนเก่าทับรูปจริง
+- zip นี้จัดไฟล์ไว้ที่ root โดยตรง: app, lib, public, package.json อยู่ชั้นแรก

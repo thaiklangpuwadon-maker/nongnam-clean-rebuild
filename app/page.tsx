@@ -34,6 +34,7 @@ type Status = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
 
 const APP_VERSION = "v3-final-today";
 const OWNER_KEY = "nongnam_owner_mode_v3";
+const APP_CACHE_KEY = "nongnam_app_cache_version";
 
 function mimeType(): string {
   const list = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/mpeg"];
@@ -108,18 +109,34 @@ export default function Page() {
 
   /* ---------- LOAD on mount ---------- */
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      const lastVersion = localStorage.getItem(APP_CACHE_KEY);
+      if (lastVersion !== APP_VERSION) {
+        localStorage.removeItem(LOCAL_MANIFEST_KEY);
+        localStorage.removeItem(LOCAL_ASSETS_KEY);
+        localStorage.setItem(APP_CACHE_KEY, APP_VERSION);
+      }
+    }
+
     const savedMem = loadJSON<Partial<UserMemory>>(MEMORY_KEY, {});
     const merged = { ...DEFAULT_USER_MEMORY, ...savedMem };
+
+    const owner = typeof window !== "undefined" && localStorage.getItem(OWNER_KEY) === "true";
+    if (owner) merged.ownerMode = true;
+
     setMem(merged);
 
     const savedAssets = loadJSON<Record<string, string>>(LOCAL_ASSETS_KEY, {});
     setAssets(savedAssets);
 
-    const owner = typeof window !== "undefined" && localStorage.getItem(OWNER_KEY) === "true";
-    if (owner) merged.ownerMode = true;
-
     const savedManifest = loadLocalManifest();
-    setManifest(savedManifest);
+    if (savedManifest?.version >= 3) {
+      setManifest(savedManifest);
+    } else {
+      localStorage.removeItem(LOCAL_MANIFEST_KEY);
+      localStorage.removeItem(LOCAL_ASSETS_KEY);
+      setManifest(buildDefaultManifest());
+    }
 
     // ถ้าตั้งค่าแล้วเข้า chat เลย
     if (merged.setupDone) setScreen("chat");
