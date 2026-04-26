@@ -239,9 +239,23 @@ export default function Page() {
     speechSynthesis.speak(u);
   }
 
+  function isBookIntent(text: string) {
+    return /(อ่านหนังสือ|เล่านิทาน|ชั้นหนังสือ|หนังสือให้ฟัง|อ่านให้ฟัง)/.test(text);
+  }
+
   async function sendToAI(text: string) {
     const msg = text.trim();
     if (!msg) return;
+
+    if (isBookIntent(msg)) {
+      addChat("user", msg);
+      const canned = `โอเคค่ะพี่ เลือกหนังสือได้เลยนะคะ 💗 ในคลังมีทั้งกำลังใจ นิทาน เรื่องผี ความรัก และความรู้ เดี๋ยว${mem.nongnamName}อ่านให้ฟังได้เลย`;
+      addChat("assistant", canned);
+      setScreen("books");
+      speak(canned);
+      return;
+    }
+
     if (mem.gems <= 0) return notify("เพชรหมดแล้วค่ะ เติมเพชรก่อนคุยต่อนะ");
     addChat("user", msg);
     setMem(prev => ({ ...prev, gems: Math.max(0, prev.gems - 1) }));
@@ -477,7 +491,7 @@ export default function Page() {
         <section className="screen hero-screen">
           <div className="badge">🌸 Nong Nam Companion</div>
           <h1>ยินดีต้อนรับ<br /><em>น้องน้ำ</em>รออยู่นะ</h1>
-          <p>เพื่อนคุย เลขาส่วนตัว หรือคนที่อยากเล่าเรื่องวันนี้ให้ฟัง — น้องน้ำพร้อมอยู่ข้าง ๆ พี่เสมอ</p>
+          <p>เลือกได้เลยว่าจะเอาน้องน้ำผู้หญิงหรือน้องน้ำผู้ชาย แล้วค่อยตั้งค่าเพียงครั้งเดียว จากนั้นครั้งต่อไปเข้าแชตได้เลย</p>
 
           <div className="welcome-cards">
             <button className="welcome-card female" onClick={() => pickGender("female")}>
@@ -557,19 +571,21 @@ export default function Page() {
             onDoubleClick={onAvatarDoubleClick}
             style={{ touchAction: "none" }}
           >
-            <img
-              src={currentChatImage}
-              alt={mem.nongnamName}
-              draggable={false}
-              style={{
-                transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`,
-                transformOrigin: "center center",
-                transition: pinch.current.active || pinch.current.dragging ? "none" : "transform .25s ease",
-              }}
-              onError={(e) => {
-                (e.currentTarget as HTMLImageElement).src = `/assets/avatars/${mem.gender}/default.jpg`;
-              }}
-            />
+            <div className={`avatar-bob ${zoom.scale > 1.02 ? "paused" : ""}`}>
+              <img
+                src={currentChatImage}
+                alt={mem.nongnamName}
+                draggable={false}
+                style={{
+                  transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`,
+                  transformOrigin: "center center",
+                  transition: pinch.current.active || pinch.current.dragging ? "none" : "transform .25s ease",
+                }}
+                onError={(e) => {
+                  (e.currentTarget as HTMLImageElement).src = `/assets/avatars/${mem.gender}/default.jpg`;
+                }}
+              />
+            </div>
           </div>
 
           {/* top floating row: bookshelf-left, name+gems-right */}
@@ -603,6 +619,7 @@ export default function Page() {
             <button onClick={() => sendToAI("โดนหัวหน้าดุ")}>โดนดุ</button>
             <button onClick={() => sendToAI("คิดถึง")}>คิดถึง</button>
             <button onClick={() => sendToAI("กินข้าวหรือยัง")}>ทักเรื่องข้าว</button>
+            <button onClick={() => sendToAI("อ่านหนังสือให้ฟังหน่อย")}>อ่านหนังสือ</button>
           </div>
 
           <div className="bottom-control">

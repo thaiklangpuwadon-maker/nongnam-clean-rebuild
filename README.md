@@ -148,3 +148,11 @@ npm run build
 - ระบบจ่ายเงินจริง (PromptPay / Stripe)
 - ปุ่ม upload avatar ให้ผู้ใช้ (พี่บอกจะเพิ่มทีหลัง)
 - Migration: ถ้ามี user ใช้ v1 อยู่ ตอนนี้ key เปลี่ยน v1→v2 → จะกลายเป็น "ไม่มีข้อมูล" → setupDone จะเป็น false → ผู้ใช้ต้องตั้งใหม่ครั้งเดียว (acceptable)
+
+
+## v2.1 patch by ChatGPT
+- ใส่รูป welcome card ให้แน่นอน
+- เพิ่ม quick action: อ่านหนังสือ
+- ถ้าพิมพ์ขอให้อ่านหนังสือ ระบบจะพาไปชั้นหนังสือ/ตอบแนวนำทาง
+- เพิ่ม animation ขยับขึ้นลงเบา ๆ ให้ตัวละครในหน้าแชต
+- คง pinch zoom / double tap reset เหมือนเดิม
